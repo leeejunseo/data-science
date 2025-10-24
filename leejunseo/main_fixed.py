@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-6DOF Missile Trajectory Simulation
-회전 운동(Roll, Pitch, Yaw) 포함
+6DOF Missile Trajectory Simulation - Fixed Version
+실시간 시뮬레이션 78km 멈춤 문제 해결
 """
 import os
 os.environ["QT_QPA_PLATFORM"] = "xcb"
@@ -96,7 +96,8 @@ class MissileSimulation6DOF:
             'alpha': [], 'beta': [], 'CD': [], 'fuel': [], 'mach': [], 'phase': []
         }
         
-        self.sim_time = sim_time if sim_time is not None else cfg.SIM_TIME
+        # ✅ FIX: 시뮬레이션 시간 설정 (기본값 1500초)
+        self.sim_time = sim_time if sim_time is not None else 1500
         
         self.init_speed = 0.0
         self.launch_angle_rad = math.radians(launch_angle_deg)
@@ -110,7 +111,7 @@ class MissileSimulation6DOF:
             missile_info, launch_angle_deg, azimuth_deg
         )
         
-        print(f"6DOF 초기화 완료: {self.missile_type}, 발사각 {launch_angle_deg}°, 방위각 {azimuth_deg}°")
+        print(f"6DOF 초기화 완료: {self.missile_type}, 발사각 {launch_angle_deg}°, 방위각 {azimuth_deg}°, 시뮬레이션 시간 {self.sim_time}초")
     
     def update_missile_type(self, missile_type):
         """미사일 유형 업데이트 (6DOF)"""
@@ -269,7 +270,6 @@ class MissileSimulation6DOF:
         dy_dt = V * np.cos(gamma) * np.sin(psi)
         dh_dt = V * np.sin(gamma)
         
-        # 🆕 6DOF: 회전 운동 방정식 (오일러 각도 변화율) - 특이점 방지
         # 🆕 6DOF: 회전 운동 방정식 (헬퍼 함수 사용)
         dphi_dt, dtheta_dt, dpsi_euler_dt = self.calculate_euler_rates(phi, theta, p, q_rate, r)
         
@@ -330,9 +330,7 @@ class MissileSimulation6DOF:
         dh_dt = V * np.sin(gamma)
         
         # 회전 운동
-        dphi_dt = p + q_rate * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
-        dtheta_dt = q_rate * np.cos(phi) - r * np.sin(phi)
-        dpsi_euler_dt = (q_rate * np.sin(phi) + r * np.cos(phi)) / (np.cos(theta) + 1e-10)
+        dphi_dt, dtheta_dt, dpsi_euler_dt = self.calculate_euler_rates(phi, theta, p, q_rate, r)
         
         dp_dt = (L_aero + (self.inertia_yy - self.inertia_zz) * q_rate * r) / self.inertia_xx
         dq_dt = (M_aero + (self.inertia_zz - self.inertia_xx) * p * r) / self.inertia_yy
@@ -379,9 +377,7 @@ class MissileSimulation6DOF:
         dh_dt = V * np.sin(gamma)
         
         # 회전 운동
-        dphi_dt = p + q_rate * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
-        dtheta_dt = q_rate * np.cos(phi) - r * np.sin(phi)
-        dpsi_euler_dt = (q_rate * np.sin(phi) + r * np.cos(phi)) / (np.cos(theta) + 1e-10)
+        dphi_dt, dtheta_dt, dpsi_euler_dt = self.calculate_euler_rates(phi, theta, p, q_rate, r)
         
         dp_dt = (L_aero + (self.inertia_yy - self.inertia_zz) * q_rate * r) / self.inertia_xx
         dq_dt = (M_aero + (self.inertia_zz - self.inertia_xx) * p * r) / self.inertia_yy
@@ -401,19 +397,16 @@ class MissileSimulation6DOF:
     event_ground.terminal = True
     event_ground.direction = -1
     
-    def run_simulation(self, sim_time=None):
-        """6DOF 시뮬레이션 실행"""
-        if sim_time is not None:
-            self.sim_time = sim_time
+    def run_simulation(self):
+        """시뮬레이션 실행 (모드 2용)"""
+        self.t = []
+        self.states = []
         
-        print("=" * 60)
-        print("6DOF 미사일 시뮬레이션 시작")
-        print("=" * 60)
+        print(f"시뮬레이션 시작: {self.missile_type}")
         
         # 1. 수직상승
         print("1단계: 수직상승")
         t_vertical_end = self.vertical_time
-        
         sol_vertical = solve_ivp(
             self.dynamics_vertical_6dof,
             [0, t_vertical_end],
@@ -422,41 +415,33 @@ class MissileSimulation6DOF:
             dense_output=True
         )
         
-        if len(sol_vertical.t) > 0:
-            t_dense = np.linspace(0, t_vertical_end, int(t_vertical_end / 0.1) + 1)
-            if sol_vertical.sol is not None:
-                states_dense = sol_vertical.sol(t_dense).T
-                self.t.extend(t_dense.tolist())
-                self.states.extend(states_dense.tolist())
-            
-            last_state_after_vertical = sol_vertical.y[:, -1]
-        else:
-            print("수직상승 단계 실패")
-            return None
+        t_dense = np.linspace(0, t_vertical_end, int(t_vertical_end/0.1)+1)
+        if sol_vertical.sol is not None:
+            states_dense = sol_vertical.sol(t_dense).T
+            self.t.extend(t_dense.tolist())
+            self.states.extend(states_dense.tolist())
+        
+        last_state = sol_vertical.y[:, -1]
         
         # 2. 피치 전환
         print("2단계: 피치 전환")
         t_pitch_start = t_vertical_end
         t_pitch_end = t_vertical_end + self.pitch_time
-        
         sol_pitch = solve_ivp(
             self.dynamics_pitch_6dof,
             [t_pitch_start, t_pitch_end],
-            last_state_after_vertical,
+            last_state,
             method='RK45',
             dense_output=True
         )
         
-        if len(sol_pitch.t) > 0:
-            t_dense = np.linspace(t_pitch_start, t_pitch_end, int(self.pitch_time / 0.1) + 1)
-            if sol_pitch.sol is not None:
-                states_dense = sol_pitch.sol(t_dense).T
-                self.t.extend(t_dense.tolist())
-                self.states.extend(states_dense.tolist())
-            
-            last_state_after_pitch = sol_pitch.y[:, -1]
-        else:
-            last_state_after_pitch = last_state_after_vertical
+        t_dense = np.linspace(t_pitch_start, t_pitch_end, int(self.pitch_time/0.1)+1)
+        if sol_pitch.sol is not None:
+            states_dense = sol_pitch.sol(t_dense).T
+            self.t.extend(t_dense.tolist())
+            self.states.extend(states_dense.tolist())
+        
+        last_state = sol_pitch.y[:, -1]
         
         # 3. 등자세 비행
         print("3단계: 등자세 비행")
@@ -467,54 +452,48 @@ class MissileSimulation6DOF:
             sol_constant = solve_ivp(
                 self.dynamics_constant_6dof,
                 [t_constant_start, t_constant_end],
-                last_state_after_pitch,
+                last_state,
                 method='RK45',
                 dense_output=True
             )
             
-            if len(sol_constant.t) > 0:
-                t_dense = np.linspace(t_constant_start, t_constant_end, int((t_constant_end - t_constant_start) / 0.1) + 1)
-                if sol_constant.sol is not None:
-                    states_dense = sol_constant.sol(t_dense).T
-                    self.t.extend(t_dense.tolist())
-                    self.states.extend(states_dense.tolist())
-                
-                last_state_after_constant = sol_constant.y[:, -1]
-            else:
-                last_state_after_constant = last_state_after_pitch
-        else:
-            last_state_after_constant = last_state_after_pitch
+            t_dense = np.linspace(t_constant_start, t_constant_end, int((t_constant_end-t_constant_start)/0.1)+1)
+            if sol_constant.sol is not None:
+                states_dense = sol_constant.sol(t_dense).T
+                self.t.extend(t_dense.tolist())
+                self.states.extend(states_dense.tolist())
+            
+            last_state = sol_constant.y[:, -1]
         
-        # 4. 중간단계 (관성비행)
+        # 4. 중간단계
         print("4단계: 중간단계 비행")
         t_mid_start = t_constant_end
         t_mid_end = self.sim_time
         
+        print(f"  중간단계: {t_mid_start:.1f}초 → {t_mid_end:.1f}초")
+        
         sol_mid = solve_ivp(
             self.dynamics_midcourse_6dof,
             [t_mid_start, t_mid_end],
-            last_state_after_constant,
+            last_state,
             method='RK45',
             events=[self.event_ground],
             dense_output=True
         )
         
-        # 지면 충돌 처리
         collision_times = sol_mid.t_events[0] if sol_mid.t_events else []
         if len(collision_times) > 0:
             t_ground = collision_times[0]
-            print(f"지면 충돌 감지: {t_ground:.2f}초")
-            t_dense = np.linspace(t_mid_start, t_ground, int((t_ground - t_mid_start) / 0.1) + 1)
-            if sol_mid.sol is not None:
-                states_dense = sol_mid.sol(t_dense).T
-                self.t.extend(t_dense.tolist())
-                self.states.extend(states_dense.tolist())
+            print(f"  지면 충돌 감지: {t_ground:.2f}초")
+            t_dense = np.linspace(t_mid_start, t_ground, int((t_ground-t_mid_start)/0.1)+1)
         else:
-            t_dense = np.linspace(t_mid_start, t_mid_end, int((t_mid_end - t_mid_start) / 0.1) + 1)
-            if sol_mid.sol is not None:
-                states_dense = sol_mid.sol(t_dense).T
-                self.t.extend(t_dense.tolist())
-                self.states.extend(states_dense.tolist())
+            print(f"  지면 충돌 없음, 최대 시간까지 시뮬레이션")
+            t_dense = np.linspace(t_mid_start, t_mid_end, int((t_mid_end-t_mid_start)/0.1)+1)
+        
+        if sol_mid.sol is not None:
+            states_dense = sol_mid.sol(t_dense).T
+            self.t.extend(t_dense.tolist())
+            self.states.extend(states_dense.tolist())
         
         print(f"시뮬레이션 계산 완료! 전체 비행 시간: {self.t[-1]:.2f}초")
         
@@ -541,7 +520,7 @@ class MissileSimulation6DOF:
         return self.results
     
     def run_simulation_realtime(self):
-        """실시간 3D 시각화와 함께 시뮬레이션 실행"""
+        """✅ FIX: 실시간 3D 시각화와 함께 시뮬레이션 실행 (교수님 코드 참조)"""
         print("실시간 시각화와 함께 시뮬레이션을 시작합니다...")
         
         # 대화형 모드 활성화
@@ -556,12 +535,16 @@ class MissileSimulation6DOF:
         trajectory_y = []
         trajectory_z = []
         
-        # 초기화
+        # ✅ FIX: 초기화 - 충분히 긴 시뮬레이션 시간 설정
         self.initialize_simulation(launch_angle_deg=45, azimuth_deg=90, sim_time=1500)
         
         # 상태 리스트 초기화 (중요!)
         self.t = []
         self.states = []
+        
+        print(f"초기 설정:")
+        print(f"  - 연소 시간: {self.burn_time:.1f}초")
+        print(f"  - 시뮬레이션 최대 시간: {self.sim_time:.1f}초")
         
         # 1. 수직상승
         print("1단계: 수직상승")
@@ -580,19 +563,25 @@ class MissileSimulation6DOF:
             self.t.extend(t_dense.tolist())
             self.states.extend(states_dense.tolist())
             
+            # ✅ FIX: 교수님 코드처럼 단위를 미터로 유지 (표시할 때만 km로 변환)
             for i in range(len(t_dense)):
-                trajectory_x.append(states_dense[i, 3]/1000)  # km
-                trajectory_y.append(states_dense[i, 4]/1000)
-                trajectory_z.append(states_dense[i, 5]/1000)
+                trajectory_x.append(states_dense[i, 3])  # 미터
+                trajectory_y.append(states_dense[i, 4])
+                trajectory_z.append(states_dense[i, 5])
                 
                 if i % 10 == 0 or i == len(t_dense) - 1:
                     ax.clear()
-                    ax.plot(trajectory_x, trajectory_y, trajectory_z, 'b-', alpha=0.7, linewidth=2)
-                    ax.plot([trajectory_x[-1]], [trajectory_y[-1]], [trajectory_z[-1]], 'ro', markersize=8)
+                    # km로 변환하여 표시
+                    ax.plot(np.array(trajectory_x)/1000, np.array(trajectory_y)/1000, 
+                           np.array(trajectory_z)/1000, 'b-', alpha=0.7, linewidth=2)
+                    ax.plot([trajectory_x[-1]/1000], [trajectory_y[-1]/1000], 
+                           [trajectory_z[-1]/1000], 'ro', markersize=8)
                     
-                    ax.set_xlim([min(min(trajectory_x), -0.01), max(max(trajectory_x)*1.1, 0.01)])
-                    ax.set_ylim([min(min(trajectory_y), -0.01), max(max(trajectory_y)*1.1, 0.01)])
-                    ax.set_zlim([0, max(max(trajectory_z)*1.1, 0.01)])
+                    ax.set_xlim([min(min(trajectory_x)/1000, -0.01), 
+                                max(max(trajectory_x)*1.1/1000, 0.01)])
+                    ax.set_ylim([min(min(trajectory_y)/1000, -0.01), 
+                                max(max(trajectory_y)*1.1/1000, 0.01)])
+                    ax.set_zlim([0, max(max(trajectory_z)*1.1/1000, 0.01)])
                     
                     ax.set_xlabel('X (km)')
                     ax.set_ylabel('Y (km)')
@@ -607,6 +596,7 @@ class MissileSimulation6DOF:
                     plt.pause(0.01)
         
         last_state_after_vertical = sol_vertical.y[:, -1]
+        print(f"  수직상승 완료: 고도 {last_state_after_vertical[5]/1000:.2f}km")
         
         # 2. 피치 전환
         print("2단계: 피치 전환")
@@ -627,18 +617,22 @@ class MissileSimulation6DOF:
             self.states.extend(states_dense.tolist())
             
             for i in range(len(t_dense)):
-                trajectory_x.append(states_dense[i, 3]/1000)
-                trajectory_y.append(states_dense[i, 4]/1000)
-                trajectory_z.append(states_dense[i, 5]/1000)
+                trajectory_x.append(states_dense[i, 3])
+                trajectory_y.append(states_dense[i, 4])
+                trajectory_z.append(states_dense[i, 5])
                 
                 if i % 10 == 0 or i == len(t_dense) - 1:
                     ax.clear()
-                    ax.plot(trajectory_x, trajectory_y, trajectory_z, 'b-', alpha=0.7, linewidth=2)
-                    ax.plot([trajectory_x[-1]], [trajectory_y[-1]], [trajectory_z[-1]], 'ro', markersize=8)
+                    ax.plot(np.array(trajectory_x)/1000, np.array(trajectory_y)/1000, 
+                           np.array(trajectory_z)/1000, 'b-', alpha=0.7, linewidth=2)
+                    ax.plot([trajectory_x[-1]/1000], [trajectory_y[-1]/1000], 
+                           [trajectory_z[-1]/1000], 'ro', markersize=8)
                     
-                    ax.set_xlim([min(min(trajectory_x), -0.01), max(max(trajectory_x)*1.1, 0.01)])
-                    ax.set_ylim([min(min(trajectory_y), -0.01), max(max(trajectory_y)*1.1, 0.01)])
-                    ax.set_zlim([0, max(max(trajectory_z)*1.1, 0.01)])
+                    ax.set_xlim([min(min(trajectory_x)/1000, -0.01), 
+                                max(max(trajectory_x)*1.1/1000, 0.01)])
+                    ax.set_ylim([min(min(trajectory_y)/1000, -0.01), 
+                                max(max(trajectory_y)*1.1/1000, 0.01)])
+                    ax.set_zlim([0, max(max(trajectory_z)*1.1/1000, 0.01)])
                     
                     ax.set_xlabel('X (km)')
                     ax.set_ylabel('Y (km)')
@@ -653,6 +647,7 @@ class MissileSimulation6DOF:
                     plt.pause(0.01)
         
         last_state_after_pitch = sol_pitch.y[:, -1]
+        print(f"  피치 전환 완료: 고도 {last_state_after_pitch[5]/1000:.2f}km")
         
         # 3. 등자세 비행
         print("3단계: 등자세 비행")
@@ -675,18 +670,22 @@ class MissileSimulation6DOF:
                 self.states.extend(states_dense.tolist())
                 
                 for i in range(len(t_dense)):
-                    trajectory_x.append(states_dense[i, 3]/1000)
-                    trajectory_y.append(states_dense[i, 4]/1000)
-                    trajectory_z.append(states_dense[i, 5]/1000)
+                    trajectory_x.append(states_dense[i, 3])
+                    trajectory_y.append(states_dense[i, 4])
+                    trajectory_z.append(states_dense[i, 5])
                     
                     if i % 10 == 0 or i == len(t_dense) - 1:
                         ax.clear()
-                        ax.plot(trajectory_x, trajectory_y, trajectory_z, 'b-', alpha=0.7, linewidth=2)
-                        ax.plot([trajectory_x[-1]], [trajectory_y[-1]], [trajectory_z[-1]], 'ro', markersize=8)
+                        ax.plot(np.array(trajectory_x)/1000, np.array(trajectory_y)/1000, 
+                               np.array(trajectory_z)/1000, 'b-', alpha=0.7, linewidth=2)
+                        ax.plot([trajectory_x[-1]/1000], [trajectory_y[-1]/1000], 
+                               [trajectory_z[-1]/1000], 'ro', markersize=8)
                         
-                        ax.set_xlim([min(min(trajectory_x), -0.01), max(max(trajectory_x)*1.1, 0.01)])
-                        ax.set_ylim([min(min(trajectory_y), -0.01), max(max(trajectory_y)*1.1, 0.01)])
-                        ax.set_zlim([0, max(max(trajectory_z)*1.1, 0.01)])
+                        ax.set_xlim([min(min(trajectory_x)/1000, -0.01), 
+                                    max(max(trajectory_x)*1.1/1000, 0.01)])
+                        ax.set_ylim([min(min(trajectory_y)/1000, -0.01), 
+                                    max(max(trajectory_y)*1.1/1000, 0.01)])
+                        ax.set_zlim([0, max(max(trajectory_z)*1.1/1000, 0.01)])
                         
                         ax.set_xlabel('X (km)')
                         ax.set_ylabel('Y (km)')
@@ -701,13 +700,19 @@ class MissileSimulation6DOF:
                         plt.pause(0.01)
             
             last_state_after_constant = sol_constant.y[:, -1]
+            print(f"  등자세 비행 완료: 고도 {last_state_after_constant[5]/1000:.2f}km")
         else:
             last_state_after_constant = last_state_after_pitch
         
-        # 4. 중간단계
+        # ✅ FIX: 4. 중간단계 - 디버그 출력 추가
         print("4단계: 중간단계 비행")
         t_mid_start = t_constant_end
         t_mid_end = self.sim_time
+        
+        print(f"  중간단계 시작: t={t_mid_start:.1f}초, 고도={last_state_after_constant[5]/1000:.2f}km")
+        print(f"  중간단계 종료 예정: t={t_mid_end:.1f}초")
+        print(f"  초기 속도: {last_state_after_constant[0]:.1f}m/s")
+        print(f"  초기 비행경로각: {np.rad2deg(last_state_after_constant[1]):.2f}°")
         
         sol_mid = solve_ivp(
             self.dynamics_midcourse_6dof,
@@ -715,16 +720,22 @@ class MissileSimulation6DOF:
             last_state_after_constant,
             method='RK45',
             events=[self.event_ground],
-            dense_output=True
+            dense_output=True,
+            max_step=1.0  # ✅ FIX: 최대 스텝 크기 설정
         )
         
         collision_times = sol_mid.t_events[0] if sol_mid.t_events else []
         if len(collision_times) > 0:
             t_ground = collision_times[0]
-            print(f"지면 충돌 감지: {t_ground:.2f}초")
+            print(f"  ✅ 지면 충돌 감지: {t_ground:.2f}초")
             t_dense = np.linspace(t_mid_start, t_ground, int((t_ground-t_mid_start)/0.1)+1)
         else:
-            t_dense = np.linspace(t_mid_start, t_mid_end, int((t_mid_end-t_mid_start)/0.1)+1)
+            print(f"  ⚠️ 지면 충돌 없음, 최대 시간({t_mid_end:.1f}초)까지 시뮬레이션")
+            if sol_mid.success:
+                t_dense = np.linspace(t_mid_start, sol_mid.t[-1], int((sol_mid.t[-1]-t_mid_start)/0.1)+1)
+            else:
+                print(f"  ❌ 중간단계 시뮬레이션 실패: {sol_mid.message}")
+                t_dense = np.linspace(t_mid_start, min(t_mid_start + 10, t_mid_end), 100)
         
         if hasattr(sol_mid, 'sol') and sol_mid.sol is not None:
             states_dense = sol_mid.sol(t_dense).T
@@ -732,18 +743,22 @@ class MissileSimulation6DOF:
             self.states.extend(states_dense.tolist())
             
             for i in range(len(t_dense)):
-                trajectory_x.append(states_dense[i, 3]/1000)
-                trajectory_y.append(states_dense[i, 4]/1000)
-                trajectory_z.append(states_dense[i, 5]/1000)
+                trajectory_x.append(states_dense[i, 3])
+                trajectory_y.append(states_dense[i, 4])
+                trajectory_z.append(states_dense[i, 5])
                 
                 if i % 10 == 0 or i == len(t_dense) - 1:
                     ax.clear()
-                    ax.plot(trajectory_x, trajectory_y, trajectory_z, 'b-', alpha=0.7, linewidth=2)
-                    ax.plot([trajectory_x[-1]], [trajectory_y[-1]], [trajectory_z[-1]], 'ro', markersize=8)
+                    ax.plot(np.array(trajectory_x)/1000, np.array(trajectory_y)/1000, 
+                           np.array(trajectory_z)/1000, 'b-', alpha=0.7, linewidth=2)
+                    ax.plot([trajectory_x[-1]/1000], [trajectory_y[-1]/1000], 
+                           [trajectory_z[-1]/1000], 'ro', markersize=8)
                     
-                    ax.set_xlim([min(min(trajectory_x), -0.01), max(max(trajectory_x)*1.1, 0.01)])
-                    ax.set_ylim([min(min(trajectory_y), -0.01), max(max(trajectory_y)*1.1, 0.01)])
-                    ax.set_zlim([0, max(max(trajectory_z)*1.1, 0.01)])
+                    ax.set_xlim([min(min(trajectory_x)/1000, -10), 
+                                max(max(trajectory_x)*1.1/1000, 10)])
+                    ax.set_ylim([min(min(trajectory_y)/1000, -10), 
+                                max(max(trajectory_y)*1.1/1000, 10)])
+                    ax.set_zlim([0, max(max(trajectory_z)*1.1/1000, 10)])
                     
                     ax.set_xlabel('X (km)')
                     ax.set_ylabel('Y (km)')
