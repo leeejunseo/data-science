@@ -5,7 +5,7 @@ Missile Trajectory Simulation - 원본 기반 최소 수정 버전
 """
 import os
 # Qt Wayland 플러그인 오류 방지를 위한 환경 변수 설정
-# os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 import numpy as np
 import matplotlib
