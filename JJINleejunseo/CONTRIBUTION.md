@@ -413,10 +413,6 @@ Week 7 (11.09-11.10): 통합 및 최적화
 ### 주요 참고 문헌
 1. Belkacem, B., & Bachir, N. (2019). "Simulation of 6DOF Nonlinear Missile"
    - 6DoF 운동방정식 및 검증 방법
-2. Kisabo et al. (2019). "State-Space Modelling of a Rocket for Optimal Control"
-   - 상태 벡터 정의 및 제어 시스템
-3. ISA Standard Atmosphere Model (ISO 2533:1975)
-   - 표준 대기 모델
 
 ### 사용 기술 스택
 - **언어**: Python 3.9+
