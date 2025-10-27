@@ -537,5 +537,5 @@ INSERT INTO TrajectoryData VALUES
 ---
 
 **문서 버전**: 1.0.0  
-**최종 수정일**: 2025-01-27  
-**작성자**: Development Team
+**최종 수정일**: 2025-10-27  
+**작성자**: 이준서
