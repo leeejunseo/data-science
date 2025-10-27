@@ -239,13 +239,10 @@ leejunseo/
 1. **Belkacem, B., & Bachir, N. (2019)**. "Simulation of 6DOF Nonlinear Missile"
    - 6DoF 운동방정식 및 검증 방법론
 
-2. **Kisabo et al. (2019)**. "State-Space Modelling of a Rocket for Optimal Control"
-   - 상태 벡터 정의 및 제어 시스템
-
-3. **ISO 2533:1975**. "Standard Atmosphere"
+2. **ISO 2533:1975**. "Standard Atmosphere"
    - 표준 대기 모델 (ISA)
 
-4. **교수님 제공 3DoF 코드**
+3. **교수님 제공 3DoF 코드**
    - 기본 탄도 미사일 시뮬레이션 프레임워크
 
 ---
@@ -265,5 +262,5 @@ leejunseo/
 | 김찬진 | 논문 분석 및 데이터 설계 | 20% |
 | 박윤준 | 물리량 분석 및 검증 설계 | 20% |
 
-**작성일**: 2024.10.28  
-**최종 수정**: 2024.10.28
+**작성일**: 2025.10.28  
+**최종 수정**: 2025.10.28
