@@ -238,9 +238,9 @@ leejunseo/
 
   - **GitHub Issues**: 버그 추적 및 기능 요청
   - **GitHub Projects**: 작업 관리 (Kanban 보드)
-  - **Notion**: 설계 문서 및 회의록 공유
+  - **Google Docs**: 설계 문서 및 회의록 공유
   - **카카오톡**: 일상 소통
-  - **Discord**: 정기 회의 (매주 수요일 19:00)
+  - **정기회의**: 매주 금요일 
 
 ### 코딩 스타일
 
