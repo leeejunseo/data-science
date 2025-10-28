@@ -25,6 +25,7 @@
   - **등자세 비행 단계**: 일정 자세 유지하며 추력 비행 (15\~60초)
   - **중간단계 비행**: 추력 종료 후 관성 비행 및 대기권 재진입 (\~1500초)
   - **RK45 수치 적분**: scipy.integrate.solve\_ivp를 활용한 고정밀 궤적 계산
+  - **안정화 개선**: 78km 멈춤 버그 수정, 공력 모멘트 계산 안정화
 
 ### 3\. **다중 미사일 지원**
 
@@ -66,7 +67,7 @@ matplotlib>=3.7.0      # 시각화
 ### 선택적 라이브러리
 
 ```
-tqdm>=4.65.0           # 진행 표시 (데이터 생성 시)
+tqdm>=4.65.0            # 진행 표시 (데이터 생성 시)
 pandas>=2.0.0          # 데이터 분석 (선택)
 ```
 
@@ -104,13 +105,13 @@ pip install numpy scipy matplotlib
 #### 기본 실행 (SCUD-B, 발사각 45°)
 
 ```bash
-python main_6dof.py
+python main_fixed.py
 ```
 
 #### 사용자 정의 실행 예시
 
 ```python
-from main_6dof import MissileSimulation6DOF
+from main_fixed import MissileSimulation6DOF
 
 # 시뮬레이션 객체 생성
 sim = MissileSimulation6DOF(missile_type="NODONG", apply_errors=False)
@@ -166,33 +167,33 @@ print(f"최대 고도: {max(results['h'])/1000:.2f} km")
 ```
 leejunseo/
 │
-├── main_6dof.py              # 6DOF 시뮬레이션 메인 파일 (694줄)
-│   ├── MissileSimulation6DOF 클래스
-│   ├── 4단계 동역학 함수 (vertical, pitch, constant, midcourse)
-│   ├── 공력 모멘트 계산 (calculate_aerodynamic_moments)
-│   ├── 오일러 각도 변환 (calculate_euler_rates)
-│   └── 시각화 (plot_results_6dof)
+├── main_fixed.py            # 6DOF 시뮬레이션 메인 파일 (694줄)
+│    ├── MissileSimulation6DOF 클래스
+│    ├── 4단계 동역학 함수 (vertical, pitch, constant, midcourse)
+│    ├── 공력 모멘트 계산 (calculate_aerodynamic_moments)
+│    ├── 오일러 각도 변환 (calculate_euler_rates)
+│    └── 시각화 (plot_results_6dof)
 │
 ├── config_6dof.py            # 물리 모델 및 미사일 데이터 (445줄)
-│   ├── PhysicsUtils 클래스 (대기 모델, 중력, 음속)
-│   ├── StateVector6DOF 클래스 (14차원 상태 벡터 관리)
-│   └── MISSILE_TYPES 데이터베이스 (SCUD-B, NODONG, KN-23)
+│    ├── PhysicsUtils 클래스 (대기 모델, 중력, 음속)
+│    ├── StateVector6DOF 클래스 (14차원 상태 벡터 관리)
+│    └── MISSILE_TYPES 데이터베이스 (SCUD-B, NODONG, KN-23)
 │
 ├── compare_3dof_6dof.py      # 3DoF vs 6DoF 비교 분석 (~150줄)
-│   └── 두 모델의 궤적 차이 시각화
+│    └── 두 모델의 궤적 차이 시각화
 │
 ├── requirements.txt          # Python 의존성 목록
-├── README.md                 # 프로젝트 설명서
-├── CONTRIBUTION.md           # 조원별 기여도 문서
+├── README.md                  # 프로젝트 설명서
+├── CONTRIBUTION.md            # 조원별 기여도 문서
 └── description.md            # 본 문서
 │
-└── results_6dof/             # 시뮬레이션 결과 저장 폴더
-    └── 6dof_results_*.png    # 시각화 결과 이미지
+└── results_6dof/              # 시뮬레이션 결과 저장 폴더
+    └── 6dof_results_*.png      # 시각화 결과 이미지
 ```
 
 ### 주요 파일 설명
 
-#### `main_6dof.py` (694줄)
+#### `main_fixed.py` (694줄)
 
   - **핵심 시뮬레이션 엔진**: 6DOF 운동방정식 구현
   - **라인 197-226**: 공력 모멘트 계산 (롤/피치/요)
@@ -207,9 +208,9 @@ leejunseo/
   - **PhysicsUtils (라인 22-77)**: 표준 대기 모델, 중력 계산, 마하수 계산
   - **StateVector6DOF (라인 79-162)**: 14차원 상태 벡터 정의 및 검증
   - **MISSILE\_TYPES (라인 164-302)**: 3종 미사일 물리 데이터
-      - 질량, 추력, 관성 모멘트, 공력 계수, 연소 시간 등
+       - 질량, 추력, 관성 모멘트, 공력 계수, 연소 시간 등
 
-#### `compare_3dof_6dof.py` (\~150줄)
+#### `compare_3dof_6dof.py` (~150줄)
 
   - 3DoF와 6DoF 시뮬레이션 결과 비교
   - 궤적 차이, 도달 거리 오차, 자세 안정성 분석
@@ -221,18 +222,18 @@ leejunseo/
 ### IDE 및 편집기
 
   - **Visual Studio Code** (권장)
-      - Python Extension 설치
-      - Pylance (타입 체킹)
-      - Jupyter Extension (데이터 분석)
+       - Python Extension 설치
+       - Pylance (타입 체킹)
+       - Jupyter Extension (데이터 분석)
   - **PyCharm Professional** (대안)
-      - Scientific Mode 활용
+       - Scientific Mode 활용
 
 ### 버전 관리
 
   - **Git**: 소스 코드 버전 관리
   - **GitHub**: 원격 저장소 및 협업
-      - Repository: `https://github.com/leeejunseo/data-science`
-      - Branch 전략: `main` (안정 버전), `dev` (개발 버전)
+       - Repository: `https://github.com/leeejunseo/data-science`
+       - Branch 전략: `main` (안정 버전), `dev` (개발 버전)
 
 ### 협업 도구
 
@@ -278,13 +279,13 @@ leejunseo/
 ## 참고 문헌
 
 1.  **Belkacem, B., & Bachir, N. (2019)**. "Simulation of 6DOF Nonlinear Missile"
-       - 6DoF 운동방정식 및 검증 방법론
+       - 6DoF 운동방정식 및 검증 방법론
 
 2.  **ISO 2533:1975**. "Standard Atmosphere"
-       - 표준 대기 모델 (ISA)
+       - 표준 대기 모델 (ISA)
 
 3.  **교수님 제공 3DoF 코드**
-       - 기본 탄도 미사일 시뮬레이션 프레임워크
+       - 기본 탄도 미사일 시뮬레이션 프레임워크
 
 -----
 
@@ -306,5 +307,5 @@ leejunseo/
 | 김찬진 | 논문 분석 및 데이터 설계 | 20% |
 | 박윤준 | 물리량 분석 및 검증 설계 | 20% |
 
-**작성일**: 2025.10.28  
-**최종 수정**: 2025.10.28
+**작성일**: 2025.10.28  
+**최종 수정**: 2025.10.28 (main_fixed.py 반영)

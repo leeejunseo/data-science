@@ -4,6 +4,7 @@
 - [개발 환경 설정](#개발-환경-설정)
 - [테스트 방법](#테스트-방법)
 - [배포 절차](#배포-절차)
+- [main_fixed.py 주요 변경사항](#main_fixedpy-주요-변경사항)
 
 ---
 
@@ -391,5 +392,126 @@ jobs:
 3. ✅ IDE 설정 완료
 4. ✅ Git 설정 확인
 5. ✅ 테스트 실행 확인
+
+---
+
+# main_fixed.py 주요 변경사항
+
+## 🆕 버그 수정 및 안정화
+
+### 1. 78km 멈춤 버그 수정
+**문제**: 실시간 시뮬레이션이 78km 고도에서 멈추는 현상
+**원인**: `sim_time` 기본값이 설정되지 않아 중간단계 시뮬레이션이 조기 종료
+**해결**:
+```python
+# main_fixed.py 라인 99-100
+self.sim_time = sim_time if sim_time is not None else 1500
+```
+
+### 2. 공력 모멘트 계산 안정화
+**문제**: 과도한 공력 모멘트로 인한 수치 발산
+**해결**: 라인 198-227에서 제한 적용
+```python
+# 받음각 제한: ±45도
+alpha = np.clip(theta - gamma, -np.pi/4, np.pi/4)
+
+# 각속도 정규화: ±10 rad/s
+p_norm = np.clip(p, -10.0, 10.0)
+
+# 모멘트 제한: ±1e6 N·m
+L_aero = np.clip(q_dynamic * self.wing_area * self.length * Cl, -max_moment, max_moment)
+```
+
+### 3. 오일러 각도 변환 안정화
+**문제**: 짐벌락 발생 가능성
+**해결**: 라인 181-196에서 강화된 예외 처리
+```python
+# cos(theta) ≈ 0 예외 처리
+cos_theta = np.cos(theta)
+tan_theta = np.tan(theta) if abs(cos_theta) > 0.01 else 0.0
+
+# 각도 변화율 제한: ±5 rad/s
+dphi_dt = np.clip(dphi_dt, -max_angle_rate, max_angle_rate)
+```
+
+## 🎨 새로운 기능
+
+### 1. 실시간 3D 시각화 모드
+**함수**: `run_simulation_realtime()` (라인 522-800)
+**기능**:
+- matplotlib 대화형 모드(plt.ion()) 활용
+- 4단계 비행 과정 실시간 애니메이션
+- 속도, 고도, 시간 정보 실시간 표시
+
+**사용법**:
+```python
+sim = MissileSimulation6DOF()
+sim.run_simulation_realtime()  # 자동으로 초기화 및 실행
+```
+
+### 2. 2가지 실행 모드 지원
+**모드 1**: 실시간 3D 궤적 시뮬레이션 (기본)
+- 사용자가 비행 과정을 실시간으로 관찰
+- 교육 및 시연용으로 적합
+
+**모드 2**: 상세 결과 그래프 (12-패널)
+- 모든 물리량의 시간 변화 분석
+- 연구 및 데이터 분석용으로 적합
+
+## 📊 코드 구조 개선
+
+### 파일 크기 및 라인 수
+- **main_fixed.py**: 978줄 (기존 main_6dof.py 대비 +284줄)
+- 주요 추가: 실시간 시각화 시스템 (279줄)
+
+### 주요 함수 위치
+| 함수명 | 라인 | 설명 |
+|--------|------|------|
+| `plot_with_guarantee()` | 22-37 | 그래프 저장/표시 유틸리티 |
+| `calculate_euler_rates()` | 181-196 | 오일러 각도 변환 (안정화) |
+| `calculate_aerodynamic_moments()` | 198-227 | 공력 모멘트 (스무딩) |
+| `dynamics_vertical_6dof()` | 229-287 | 수직 상승 동역학 |
+| `dynamics_pitch_6dof()` | 289-344 | 피치 전환 동역학 |
+| `dynamics_constant_6dof()` | 346-348 | 등자세 비행 |
+| `dynamics_midcourse_6dof()` | 350-391 | 중간단계 비행 |
+| `run_simulation()` | 400-520 | 모드 2 실행 |
+| `run_simulation_realtime()` | 522-800 | 모드 1 실행 |
+| `plot_results_6dof()` | 802-931 | 12-패널 시각화 |
+
+## 🧪 테스트 가이드
+
+### 안정성 테스트
+```python
+# 다양한 발사각에서 테스트
+for angle in range(10, 91, 10):
+    sim = MissileSimulation6DOF()
+    sim.initialize_simulation(launch_angle_deg=angle, sim_time=1500)
+    try:
+        results = sim.run_simulation()
+        print(f"✅ {angle}° 성공")
+    except Exception as e:
+        print(f"❌ {angle}° 실패: {e}")
+```
+
+### 실시간 시각화 테스트
+```bash
+python main_fixed.py
+# 모드 1 선택 후 정상 작동 확인
+```
+
+## 📝 변경 이력
+
+**v1.1.0 (2025-10-28)** - main_fixed.py
+- ✅ 78km 멈춤 버그 수정
+- ✅ 공력 모멘트 안정화
+- ✅ 오일러 각도 변환 안정화
+- ✅ 실시간 3D 시각화 추가
+- ✅ 2가지 실행 모드 지원
+
+**v1.0.0 (2025-10-21)** - main_6dof.py
+- ✅ 6DOF 시뮬레이션 초기 구현
+- ✅ 12-패널 시각화 시스템
+
+---
 
 **Happy Coding! 🚀**

@@ -27,13 +27,14 @@
         └─────────────┴─────────────┘
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Application Layer (main_6dof.py)                │
+│            Application Layer (main_fixed.py)                 │
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │         MissileSimulation6DOF (Controller)             │ │
 │  │  - initialize_simulation()                             │ │
-│  │  - run_simulation()                                    │ │
-│  │  - equations_of_motion()                               │ │
-│  │  - plot_results()                                      │ │
+│  │  - run_simulation()           (모드 2: 상세 분석)      │ │
+│  │  - run_simulation_realtime()  (모드 1: 실시간 3D)      │ │
+│  │  - dynamics_*_6dof()          (4단계 동역학)          │ │
+│  │  - plot_results_6dof()        (12-패널 시각화)        │ │
 │  └────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
         │                 │                 │
@@ -145,49 +146,99 @@ roll_list: List[float]      # 롤각 히스토리
   - `sim_time` (float): 시뮬레이션 시간 (초)
 - **동작**: 초기 상태 벡터 생성, 각도 변환
 
-#### `run_simulation()`
-- **목적**: 시뮬레이션 실행
-- **동작**: ODE 적분, 결과 저장
+#### `run_simulation()` (모드 2)
+- **목적**: 상세 분석용 시뮬레이션 실행
+- **동작**: 4단계 순차 ODE 적분, 결과 저장
 - **예시**:
 ```python
 sim = MissileSimulation6DOF()
-sim.initialize_simulation(launch_angle_deg=45)
-sim.run_simulation()
+sim.initialize_simulation(launch_angle_deg=45, sim_time=1500)
+results = sim.run_simulation()
+sim.plot_results_6dof()
 ```
 
-#### `equations_of_motion(t, state)`
-- **목적**: 운동 방정식 정의
-- **Parameters**:
-  - `t` (float): 현재 시간
-  - `state` (np.ndarray): 상태 벡터 (14차원)
-- **Returns**: `dstate_dt` (np.ndarray): 상태 미분
-- **계산 순서**:
-  1. 대기 특성 계산
-  2. 공력 계산
-  3. 추력 계산
-  4. 가속도 계산
+#### `run_simulation_realtime()` (모드 1) 🆕
+- **목적**: 실시간 3D 시각화와 함께 시뮬레이션 실행
+- **동작**: matplotlib 대화형 모드로 궤적 애니메이션
+- **특징**: 
+  - plt.ion() 활용한 실시간 업데이트
+  - 4단계 비행 과정 실시간 표시
+  - 78km 멈춤 버그 수정 (sim_time=1500초)
+- **예시**:
+```python
+sim = MissileSimulation6DOF()
+sim.run_simulation_realtime()  # 자동으로 초기화 및 실행
+```
+
+#### 동역학 함수들 (4단계 비행 프로그램)
+
+**`dynamics_vertical_6dof(t, state)`** - 수직 상승 단계
+- 발사 후 수직 상승 (0~5초)
+- 피치각 일정 유지
+
+**`dynamics_pitch_6dof(t, state)`** - 피치 전환 단계
+- 목표 피치각으로 자세 변경 (5~15초)
+- 양력 및 제어 모멘트 적용
+
+**`dynamics_constant_6dof(t, state)`** - 등자세 비행 단계
+- 일정 자세 유지하며 추력 비행 (15~60초)
+
+**`dynamics_midcourse_6dof(t, state)`** - 중간단계 비행
+- 추력 종료 후 관성 비행 (~1500초)
+- 대기권 재진입 효과 포함
+
+**공통 계산 순서**:
+  1. 대기 특성 계산 (밀도, 온도, 음속)
+  2. 공력 계산 (항력, 양력, 모멘트)
+  3. 추력 계산 (연소 시간 고려)
+  4. 가속도 및 각가속도 계산
   5. 상태 미분 반환
 
-#### `plot_results()`
-- **목적**: 결과 시각화
-- **출력**: PNG 파일 5개
-  - trajectory_plot.png
-  - velocity_angle_plot.png
-  - euler_angles_plot.png
-  - angular_rates_plot.png
-  - aerodynamic_plot.png
+#### `plot_results_6dof()`
+- **목적**: 12-패널 통합 결과 시각화
+- **출력**: PNG 파일 1개 (고해상도 300 DPI)
+  - `results_6dof/6dof_results_YYYYMMDD_HHMMSS.png`
+- **패널 구성**:
+  1. 3D 궤적
+  2. 속도 vs 시간
+  3. 고도 vs 시간
+  4. 비행경로각 vs 시간
+  5. 롤각 (φ) vs 시간
+  6. 피치각 (θ) vs 시간
+  7. 요각 (ψ) vs 시간
+  8. 롤 각속도 (p) vs 시간
+  9. 피치 각속도 (q) vs 시간
+  10. 요 각속도 (r) vs 시간
+  11. 질량 vs 시간
+  12. 사거리 vs 고도
 
-#### `calculate_aerodynamic_forces(V, alpha, beta, rho, q, p, r)`
-- **목적**: 공력 및 모멘트 계산
+#### `calculate_aerodynamic_moments(state, q_dynamic)` 🆕
+- **목적**: 공력 모멘트 계산 (안정화 버전)
 - **Parameters**:
-  - `V`: 속도 (m/s)
+  - `state`: 14차원 상태 벡터
+  - `q_dynamic`: 동압 (0.5·ρ·V²)
+- **Returns**: 
+  - `L_aero`: 롤 모멘트 (N·m)
+  - `M_aero`: 피치 모멘트 (N·m)
+  - `N_aero`: 요 모멘트 (N·m)
   - `alpha`: 받음각 (rad)
   - `beta`: 측면 받음각 (rad)
-  - `rho`: 공기 밀도 (kg/m³)
-  - `q, p, r`: 각속도 (rad/s)
-- **Returns**: 
-  - `drag, lift`: 힘 (N)
-  - `L_aero, M_aero, N_aero`: 모멘트 (N·m)
+- **안정화 기법**:
+  - 받음각 제한: ±45도
+  - 각속도 정규화: ±10 rad/s
+  - 모멘트 제한: ±1e6 N·m
+  - 스무딩 적용
+
+#### `calculate_euler_rates(phi, theta, p, q, r)` 🆕
+- **목적**: 오일러 각도 변화율 계산 (짐벌락 방지)
+- **Parameters**:
+  - `phi, theta`: 현재 오일러 각도 (rad)
+  - `p, q, r`: 각속도 (rad/s)
+- **Returns**:
+  - `dphi_dt, dtheta_dt, dpsi_euler_dt`: 각도 변화율 (rad/s)
+- **안정화 기법**:
+  - cos(theta) ≈ 0 예외 처리
+  - 각도 변화율 제한: ±5 rad/s
 
 ---
 
@@ -536,6 +587,13 @@ INSERT INTO TrajectoryData VALUES
 
 ---
 
-**문서 버전**: 1.0.0  
-**최종 수정일**: 2025-10-27  
+**문서 버전**: 1.1.0  
+**최종 수정일**: 2025-10-28 (main_fixed.py 반영)  
 **작성자**: 이준서
+
+## 주요 업데이트 (v1.1.0)
+- ✅ 실시간 3D 시각화 모드 추가 (`run_simulation_realtime()`)
+- ✅ 78km 멈춤 버그 수정 (sim_time 기본값 1500초)
+- ✅ 공력 모멘트 계산 안정화 (과도한 값 제한)
+- ✅ 오일러 각도 변환 안정화 (짐벌락 방지 강화)
+- ✅ 4단계 동역학 함수 분리 및 최적화

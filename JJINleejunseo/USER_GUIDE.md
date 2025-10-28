@@ -1,21 +1,38 @@
-# 🚀 3DOF → 6DOF 미사일 시뮬레이션 업그레이드 완료!
+# 🚀 6DOF 미사일 시뮬레이션 사용자 가이드 (안정화 버전)
 
 ## 📦 제공 파일
 
 1. **config_6dof.py** - 6DOF 설정 파일 (관성 모멘트, 공력 계수 포함)
-2. **main_6dof.py** - 6DOF 시뮬레이션 메인 코드
-3. **CONVERSION_GUIDE.md** - 3DOF에서 6DOF로 전환하는 상세 가이드
-4. **compare_3dof_6dof.py** - 테스트 및 비교 스크립트
+2. **main_fixed.py** - 6DOF 시뮬레이션 메인 코드 (안정화 버전) 🆕
+3. **compare_3dof_6dof.py** - 테스트 및 비교 스크립트
+4. **requirements.txt** - Python 의존성 목록
+
+## 🆕 주요 업데이트 (main_fixed.py)
+
+### 버그 수정
+- ✅ **78km 멈춤 버그 수정**: sim_time 기본값 1500초로 설정
+- ✅ **공력 모멘트 안정화**: 받음각/각속도/모멘트 제한 적용
+- ✅ **오일러 각도 변환 안정화**: 짐벌락 방지 강화
+
+### 새로운 기능
+- ✅ **실시간 3D 시각화 모드**: `run_simulation_realtime()` 추가
+- ✅ **2가지 실행 모드**:
+  - 모드 1: 실시간 3D 궤적 애니메이션 (기본)
+  - 모드 2: 상세 결과 그래프 (12-패널)
 
 ---
 
 ## ⚡ 빠른 시작
 
-### 방법 1: 즉시 실행 (기존 코드 유지)
+### 방법 1: 즉시 실행 (안정화 버전)
 
 ```bash
-# 6DOF 단독 실행
-python3 main_6dof.py
+# 6DOF 실행 (실시간 3D 시각화)
+python main_fixed.py
+
+# 실행 후 모드 선택:
+# 1 - 실시간 3D 궤적 시뮬레이션 (기본)
+# 2 - 상세 결과 그래프 (12-패널)
 ```
 
 ### 방법 2: 기존 코드를 6DOF로 전환
@@ -323,36 +340,22 @@ sim = MissileSimulation6DOF(missile_type="Custom-1")
 
 #### 단계 1: Python 스크립트 작성
 ```python
-from main_6dof import MissileSimulation6DOF
+from main_fixed import MissileSimulation6DOF
 
 # 시뮬레이션 객체 생성
-sim = MissileSimulation6DOF(missile_type="SCUD-B")
+sim = MissileSimulation6DOF(missile_type="SCUD-B", apply_errors=False)
 
-# 초기 조건 설정
-launch_angle = 45      # 발사각 (도)
-azimuth = 90           # 방위각 (도)
-sim_time = 300         # 시뮬레이션 시간 (초)
+# 방법 1: 실시간 3D 시각화 (모드 1)
+sim.run_simulation_realtime()  # 자동으로 초기화 및 실행
 
-# 시뮬레이션 초기화
-sim.initialize_simulation(
-    launch_angle_deg=launch_angle,
-    azimuth_deg=azimuth,
-    sim_time=sim_time
-)
+# 방법 2: 상세 분석용 (모드 2)
+sim.initialize_simulation(launch_angle_deg=45, azimuth_deg=90, sim_time=1500)
+results = sim.run_simulation()
+sim.plot_results_6dof()
 
-# 실행
-sim.run_simulation()
-sim.plot_results()
-```
-
-#### 단계 2: 다양한 시나리오 테스트
-```python
-# 최대 사거리 시나리오
-for angle in range(30, 60, 5):
-    sim = MissileSimulation6DOF()
-    sim.initialize_simulation(launch_angle_deg=angle)
-    sim.run_simulation()
-    print(f"발사각 {angle}°: 사거리 {sim.results['x'][-1]/1000:.2f} km")
+# 결과 출력
+print(f"최종 사거리: {results['x'][-1]/1000:.2f} km")
+print(f"최대 고도: {max(results['h'])/1000:.2f} km")
 ```
 
 ### 예시 결과
