@@ -236,21 +236,14 @@ leejunseo/
 
 ### 협업 도구
 
-  - **GitHub Issues**: 버그 추적 및 기능 요청
-  - **GitHub Projects**: 작업 관리 (Kanban 보드)
+  - **GitHub**: 작업 및 코드 관리 
   - **Google Docs**: 설계 문서 및 회의록 공유
   - **카카오톡**: 일상 소통
   - **정기회의**: 매주 금요일 
 
-### 코딩 스타일
-
-  - **PEP 8**: Python 코딩 컨벤션 준수
-  - **Docstring**: Google Style 문서화
-  - **Type Hints**: Python 3.9+ 타입 힌트 사용
 
 ### 테스트 환경
 
-  - **단위 테스트**: pytest (향후 추가 예정)
   - **물리 검증**: 논문 데이터와 비교 검증
   - **시각적 검증**: 궤적 그래프 육안 확인
 
@@ -295,9 +288,12 @@ leejunseo/
 
 -----
 
-## 라이선스
+## 협업 도구
 
-본 프로젝트는 교육 목적으로 개발되었습니다.
+1. windsurf plus
+2. Gemini pro
+3. Claude pro
+4. Chat gpt
 
 -----
 
