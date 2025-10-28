@@ -35,20 +35,7 @@ code --install-extension ms-python.black-formatter
 code --install-extension eamodio.gitlens
 ```
 
----
-
-## 2. 필요한 플러그인/확장
-
-### VS Code 확장 목록
-- **Python** - Python 개발 지원
-- **Pylance** - 빠른 타입 체킹
-- **Black Formatter** - 코드 포매팅
-- **GitLens** - Git 통합
-- **Markdown All in One** - 문서 작성
-
----
-
-## 3. 코드 스타일 가이드
+## 2. 코드 스타일 가이드
 
 ### PEP 8 준수
 
@@ -376,16 +363,7 @@ jobs:
         release_name: Release ${{ github.ref }}
 ```
 
----
 
-## 추가 리소스
-
-- **PEP 8**: https://pep8.org/
-- **pytest 문서**: https://docs.pytest.org/
-- **Black**: https://black.readthedocs.io/
-- **Docker**: https://docs.docker.com/
-
----
 
 **🎯 개발 시작 전 체크리스트:**
 1. ✅ 가상 환경 활성화
