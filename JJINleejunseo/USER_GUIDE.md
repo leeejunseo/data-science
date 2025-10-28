@@ -24,10 +24,10 @@
 
 ## ⚡ 빠른 시작
 
-### 방법 1: 즉시 실행 (안정화 버전)
+### 실행 방법
 
 ```bash
-# 6DOF 실행 (실시간 3D 시각화)
+# 6DOF 시뮬레이션 실행
 python main_fixed.py
 
 # 실행 후 모드 선택:
@@ -35,32 +35,12 @@ python main_fixed.py
 # 2 - 상세 결과 그래프 (12-패널)
 ```
 
-### 방법 2: 기존 코드를 6DOF로 전환
+### improved_pattern_generator.py 수정 (필요시)
 
-```bash
-# 기존 파일 백업
-cp config.py config_3dof_backup.py
-cp main.py main_3dof_backup.py
-
-# 6DOF로 교체
-cp config_6dof.py config.py
-cp main_6dof.py main.py
-
-# 실행 (명령어 동일!)
-python3 main.py
-```
-
-### 방법 3: improved_pattern_generator.py 수정
-
-**첫 줄만 수정:**
+**import 부분 수정:**
 ```python
-# Before
-import config as cfg
-from main import MissileSimulation
-
-# After  
 import config_6dof as cfg
-from main_6dof import MissileSimulation6DOF as MissileSimulation
+from main_fixed import MissileSimulation6DOF
 ```
 
 ---
@@ -121,9 +101,10 @@ python3 compare_3dof_6dof.py
 
 ## 📚 자세한 내용
 
-- **CONVERSION_GUIDE.md** - 명령어 변경 방법 상세 가이드
 - **config_6dof.py** - 관성 모멘트 및 공력 계수 설정
-- **main_6dof.py** - 6DOF 운동 방정식 구현
+- **main_fixed.py** - 6DOF 운동 방정식 구현 (안정화 버전)
+- **DESIGN.md** - 시스템 아키텍처 문서
+- **DEV_GUIDE.md** - 개발 가이드
 
 ---
 
@@ -170,41 +151,28 @@ cn_r: -0.05          # 요 댐핑
 ### 사용할 명령어
 
 ```bash
-# ✅ 추천: 6DOF 단독 실행 (기존 코드 그대로 유지)
-python3 main_6dof.py
-
-# ✅ 대안: 기존 코드를 6DOF로 전환
-# 1. 백업
-cp config.py config_3dof.py
-cp main.py main_3dof.py
-
-# 2. 교체
-cp config_6dof.py config.py  
-cp main_6dof.py main.py
-
-# 3. 실행
-python3 main.py
+# 6DOF 시뮬레이션 실행
+python main_fixed.py
 ```
 
-### 코드 수정이 필요한 경우
+### 코드에서 사용하는 경우
 
 ```python
-# main.py 또는 improved_pattern_generator.py 첫 줄
-import config_6dof as cfg  # config → config_6dof
-from main_6dof import MissileSimulation6DOF  # 추가
+import config_6dof as cfg
+from main_fixed import MissileSimulation6DOF
+
+# 시뮬레이션 실행
+sim = MissileSimulation6DOF(missile_type="SCUD-B")
+sim.run_simulation_realtime()  # 모드 1: 실시간 3D
+# 또는
+sim.initialize_simulation(launch_angle_deg=45, sim_time=1500)
+sim.run_simulation()  # 모드 2: 상세 분석
+sim.plot_results_6dof()
 ```
 
 ---
 
-## 📞 도움이 필요하신가요?
-
-1. **CONVERSION_GUIDE.md** 참고
-2. **compare_3dof_6dof.py** 실행하여 테스트
-3. 에러 발생 시 파일 위치 확인
-
----
-
-**🎉 축하합니다! 이제 현실적인 6DOF 미사일 시뮬레이션을 사용할 수 있습니다!** 🚀
+**🎉 6DOF 미사일 시뮬레이션을 사용할 수 있습니다!** 🚀
 
 ---
 
@@ -229,7 +197,7 @@ pip list | grep -E "numpy|scipy|matplotlib"
 #### 단계 2: 시뮬레이션 실행
 ```bash
 # 기본 실행
-python main_6dof.py
+python main_fixed.py
 ```
 
 #### 단계 3: 결과 확인
@@ -320,7 +288,8 @@ MISSILE_PARAMS["Custom-1"] = {
 
 #### 단계 4: 시뮬레이션 실행
 ```python
-# main_6dof.py에서 미사일 타입 지정
+# main_fixed.py에서 미사일 타입 지정
+from main_fixed import MissileSimulation6DOF
 sim = MissileSimulation6DOF(missile_type="Custom-1")
 ```
 
@@ -343,19 +312,35 @@ sim = MissileSimulation6DOF(missile_type="Custom-1")
 from main_fixed import MissileSimulation6DOF
 
 # 시뮬레이션 객체 생성
-sim = MissileSimulation6DOF(missile_type="SCUD-B", apply_errors=False)
+sim = MissileSimulation6DOF(missile_type="SCUD-B")
 
-# 방법 1: 실시간 3D 시각화 (모드 1)
-sim.run_simulation_realtime()  # 자동으로 초기화 및 실행
+# 초기 조건 설정
+launch_angle = 45      # 발사각 (도)
+azimuth = 90           # 방위각 (도)
+sim_time = 1500        # 시뮬레이션 시간 (초)
 
-# 방법 2: 상세 분석용 (모드 2)
-sim.initialize_simulation(launch_angle_deg=45, azimuth_deg=90, sim_time=1500)
+# 시뮬레이션 초기화
+sim.initialize_simulation(
+    launch_angle_deg=launch_angle,
+    azimuth_deg=azimuth,
+    sim_time=sim_time
+)
+
+# 실행
 results = sim.run_simulation()
 sim.plot_results_6dof()
+```
 
-# 결과 출력
-print(f"최종 사거리: {results['x'][-1]/1000:.2f} km")
-print(f"최대 고도: {max(results['h'])/1000:.2f} km")
+#### 단계 2: 다양한 시나리오 테스트
+```python
+from main_fixed import MissileSimulation6DOF
+
+# 최대 사거리 시나리오
+for angle in range(30, 60, 5):
+    sim = MissileSimulation6DOF()
+    sim.initialize_simulation(launch_angle_deg=angle, sim_time=1500)
+    sim.run_simulation()
+    print(f"발사각 {angle}°: 사거리 {sim.results['x'][-1]/1000:.2f} km")
 ```
 
 ### 예시 결과
@@ -431,10 +416,12 @@ python compare_3dof_6dof.py
 
 #### 단계 1: 기본 그래프 생성
 ```python
+from main_fixed import MissileSimulation6DOF
+
 sim = MissileSimulation6DOF()
-sim.initialize_simulation()
+sim.initialize_simulation(sim_time=1500)
 sim.run_simulation()
-sim.plot_results()  # 모든 그래프 자동 생성
+sim.plot_results_6dof()  # 12-패널 그래프 생성
 ```
 
 #### 단계 2: 생성되는 그래프
@@ -562,7 +549,7 @@ DT_MAX = 0.1  # 시간 간격 줄이기
 
 **해결 방법:**
 ```python
-# main_6dof.py 상단에 추가
+# main_fixed.py 상단에 추가 (이미 설정되어 있음)
 import matplotlib
 matplotlib.use('TkAgg')  # Windows/Linux
 # matplotlib.use('MacOSX')  # Mac의 경우
@@ -575,11 +562,11 @@ import matplotlib.pyplot as plt
 ```bash
 # 환경 변수 설정 (Linux/Mac)
 export MPLBACKEND=TkAgg
-python main_6dof.py
+python main_fixed.py
 
 # Windows PowerShell
 $env:MPLBACKEND="TkAgg"
-python main_6dof.py
+python main_fixed.py
 ```
 
 ---
@@ -598,11 +585,8 @@ MemoryError: Unable to allocate array
 # 1. 시뮬레이션 시간 단축
 sim_time = 150  # 300 → 150
 
-# 2. 데이터 저장 간격 증가
-# main_6dof.py에서
-if len(self.t) % 10 == 0:  # 매 10번째 데이터만 저장
-    self.results['time'].append(t)
-    # ...
+# 2. 모드 2 사용 (실시간 시각화 비활성화)
+# 모드 2가 메모리 효율적
 
 # 3. 불필요한 데이터 삭제
 del sim.states  # 시뮬레이션 후 중간 데이터 삭제
@@ -690,23 +674,13 @@ pipdeptree
 **해결 방법:**
 ```python
 # 1. 시뮬레이션 시간 단축
-sim_time = 100  # 기본값보다 짧게
+sim_time = 500  # 1500 → 500으로 줄이기
 
-# 2. 적분 정밀도 조정
-# main_6dof.py의 solve_ivp 호출 부분
-sol = solve_ivp(
-    self.equations_of_motion,
-    [0, self.sim_time],
-    state0,
-    method='RK45',
-    rtol=1e-6,  # 1e-9 → 1e-6 (정밀도 낮춤)
-    atol=1e-8,  # 1e-12 → 1e-8
-    max_step=1.0  # 최대 시간 간격 증가
-)
+# 2. 실시간 시각화 대신 모드 2 사용
+# 모드 2가 더 빠름 (시각화 오버헤드 없음)
 
 # 3. 불필요한 계산 제거
 # 디버그 출력 비활성화
-VERBOSE = False
 ```
 
 ---
@@ -759,7 +733,7 @@ dir     # Windows
 cd /path/to/JJINleejunseo
 
 # 4. 파일 존재 확인
-ls config_6dof.py main_6dof.py
+ls config_6dof.py main_fixed.py
 
 # 5. Python 경로 확인
 python -c "import sys; print(sys.path)"
@@ -777,10 +751,10 @@ PermissionError: [Errno 13] Permission denied
 **해결 방법:**
 ```bash
 # 1. 파일 권한 확인 (Linux/Mac)
-ls -l main_6dof.py
+ls -l main_fixed.py
 
 # 2. 실행 권한 부여
-chmod +x main_6dof.py
+chmod +x main_fixed.py
 
 # 3. 쓰기 권한 확인 (그래프 저장용)
 chmod 755 .
@@ -796,7 +770,7 @@ chmod 755 .
 ### 로그 활성화
 
 ```python
-# main_6dof.py에 로깅 추가
+# main_fixed.py에 로깅 추가
 import logging
 
 logging.basicConfig(
@@ -848,9 +822,13 @@ stats.print_stats(10)  # 상위 10개 함수 출력
 
 1. **로그 파일 확인**: `simulation.log` 파일의 에러 메시지 확인
 2. **GitHub Issues**: 프로젝트 저장소에 이슈 등록
-3. **문서 참조**: `CONVERSION_GUIDE.md`, `DEV_GUIDE.md` 참고
+3. **문서 참조**: `DESIGN.md`, `DEV_GUIDE.md` 참고
 4. **커뮤니티**: Stack Overflow에 질문 게시
 
 ---
 
 **💡 팁:** 문제 발생 시 에러 메시지 전체와 실행 환경 정보(OS, Python 버전, 패키지 버전)를 함께 제공하면 빠른 해결이 가능합니다!
+
+---
+
+**최종 수정일**: 2025-10-28 (main_fixed.py 기준)

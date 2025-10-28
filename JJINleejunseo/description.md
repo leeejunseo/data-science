@@ -165,19 +165,20 @@ print(f"최대 고도: {max(results['h'])/1000:.2f} km")
 ## 프로젝트 구조
 
 ```
-leejunseo/
+JJINleejunseo/
 │
-├── main_fixed.py            # 6DOF 시뮬레이션 메인 파일 (694줄)
-│    ├── MissileSimulation6DOF 클래스
-│    ├── 4단계 동역학 함수 (vertical, pitch, constant, midcourse)
-│    ├── 공력 모멘트 계산 (calculate_aerodynamic_moments)
-│    ├── 오일러 각도 변환 (calculate_euler_rates)
-│    └── 시각화 (plot_results_6dof)
+├── main_fixed.py             # 6DOF 시뮬레이션 메인 파일 (978줄)
+│    ├── MissileSimulation6DOF 클래스
+│    ├── 4단계 동역학 함수 (vertical, pitch, constant, midcourse)
+│    ├── 공력 모멘트 계산 (calculate_aerodynamic_moments - 안정화)
+│    ├── 오일러 각도 변환 (calculate_euler_rates - 짐벌락 방지)
+│    ├── 실시간 시각화 (run_simulation_realtime)
+│    └── 상세 시각화 (plot_results_6dof)
 │
 ├── config_6dof.py            # 물리 모델 및 미사일 데이터 (445줄)
-│    ├── PhysicsUtils 클래스 (대기 모델, 중력, 음속)
-│    ├── StateVector6DOF 클래스 (14차원 상태 벡터 관리)
-│    └── MISSILE_TYPES 데이터베이스 (SCUD-B, NODONG, KN-23)
+│     ├── PhysicsUtils 클래스 (대기 모델, 중력, 음속)
+│     ├── StateVector6DOF 클래스 (14차원 상태 벡터 관리)
+│     └── MISSILE_TYPES 데이터베이스 (SCUD-B, NODONG, KN-23)
 │
 ├── compare_3dof_6dof.py      # 3DoF vs 6DoF 비교 분석 (~150줄)
 │    └── 두 모델의 궤적 차이 시각화
@@ -193,15 +194,19 @@ leejunseo/
 
 ### 주요 파일 설명
 
-#### `main_fixed.py` (694줄)
+#### `main_fixed.py` (978줄)
 
   - **핵심 시뮬레이션 엔진**: 6DOF 운동방정식 구현
-  - **라인 197-226**: 공력 모멘트 계산 (롤/피치/요)
-  - **라인 228-287**: 수직 상승 동역학
-  - **라인 289-346**: 피치 전환 동역학
-  - **라인 352-395**: 중간단계 동역학
-  - **라인 404-520**: 시뮬레이션 통합 실행 (RK45 적분)
-  - **라인 660-694**: 12-패널 시각화
+  - **라인 22-37**: 그래프 저장/표시 유틸리티
+  - **라인 181-196**: 오일러 각도 변환 (안정화, 짐벌락 방지)
+  - **라인 198-227**: 공력 모멘트 계산 (스무딩 및 제한 적용)
+  - **라인 229-287**: 수직 상승 동역학
+  - **라인 289-344**: 피치 전환 동역학
+  - **라인 346-348**: 등자세 비행 동역학
+  - **라인 350-391**: 중간단계 동역학
+  - **라인 400-520**: 시뮬레이션 통합 실행 (모드 2)
+  - **라인 522-800**: 실시간 3D 시각화 (모드 1)
+  - **라인 802-931**: 12-패널 상세 시각화
 
 #### `config_6dof.py` (445줄)
 

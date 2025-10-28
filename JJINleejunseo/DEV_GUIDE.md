@@ -140,7 +140,7 @@ pip install pytest pytest-cov
 ```python
 # tests/test_simulation.py
 import pytest
-from main_6dof import MissileSimulation6DOF
+from main_fixed import MissileSimulation6DOF
 
 class TestMissileSimulation:
     @pytest.fixture
@@ -149,18 +149,18 @@ class TestMissileSimulation:
     
     def test_initialization(self, sim):
         """초기화 테스트"""
-        sim.initialize_simulation(launch_angle_deg=45)
+        sim.initialize_simulation(launch_angle_deg=45, sim_time=1500)
         assert sim.results is not None
     
     def test_simulation_runs(self, sim):
         """시뮬레이션 실행 테스트"""
-        sim.initialize_simulation(sim_time=10)
+        sim.initialize_simulation(sim_time=100)
         sim.run_simulation()
         assert len(sim.results['time']) > 0
     
     def test_velocity_positive(self, sim):
         """속도가 양수인지 확인"""
-        sim.initialize_simulation(sim_time=50)
+        sim.initialize_simulation(sim_time=100)
         sim.run_simulation()
         for v in sim.results['velocity']:
             assert v > 0
@@ -192,21 +192,22 @@ pytest -v -s
 # tests/test_integration.py
 import pytest
 import os
-from main_6dof import MissileSimulation6DOF
+from main_fixed import MissileSimulation6DOF
 
 @pytest.mark.integration
 class TestIntegration:
     def test_end_to_end(self):
         """전체 시뮬레이션 테스트"""
         sim = MissileSimulation6DOF(missile_type="SCUD-B")
-        sim.initialize_simulation(launch_angle_deg=45, sim_time=300)
+        sim.initialize_simulation(launch_angle_deg=45, sim_time=1500)
         sim.run_simulation()
         
         assert len(sim.results['time']) > 0
         assert sim.results['x'][-1] > 0
         
-        sim.plot_results()
-        assert os.path.exists('trajectory_plot.png')
+        sim.plot_results_6dof()
+        # 결과 파일이 results_6dof 폴더에 생성되는지 확인
+        assert os.path.exists('results_6dof')
 ```
 
 ---
@@ -482,13 +483,15 @@ sim.run_simulation_realtime()  # 자동으로 초기화 및 실행
 
 ### 안정성 테스트
 ```python
+from main_fixed import MissileSimulation6DOF
+
 # 다양한 발사각에서 테스트
 for angle in range(10, 91, 10):
     sim = MissileSimulation6DOF()
     sim.initialize_simulation(launch_angle_deg=angle, sim_time=1500)
     try:
         results = sim.run_simulation()
-        print(f"✅ {angle}° 성공")
+        print(f"✅ {angle}° 성공: 사거리 {results['x'][-1]/1000:.2f}km")
     except Exception as e:
         print(f"❌ {angle}° 실패: {e}")
 ```
