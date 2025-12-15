@@ -15,7 +15,7 @@ import datetime
 from scipy.integrate import solve_ivp
 
 # radar_6dof_simulator 사용
-from radar_6dof_simulator import Radar6DOFSimulator
+from radar_6dof_ultimate import Radar6DOFSimulator
 
 # NPZ I/O 모듈
 try:
@@ -162,19 +162,9 @@ class MissileVisualization6DOF:
         # 마하수
         mach = V_mag / 340.0
         
-        # 질량 및 연료 계산 (동적)
-        mass = np.zeros_like(t)
-        fuel = np.zeros_like(t)
-        
-        for i, time in enumerate(t):
-            if time <= self.sim.burn_time:
-                # 연소 중: 질량 감소
-                mass[i] = self.sim.mass - (self.sim.propellant_mass / self.sim.burn_time) * time
-                fuel[i] = self.sim.propellant_mass - (self.sim.propellant_mass / self.sim.burn_time) * time
-            else:
-                # 연소 완료: 건조 질량
-                mass[i] = self.sim.mass_dry
-                fuel[i] = 0
+        # 질량 및 연료 (변인 통제: 상수 질량, 추력/연료 제거)
+        mass = np.full_like(t, self.sim.mass)  # 평균 질량 (상수)
+        fuel = np.zeros_like(t)  # 연료 제거 (항상 0)
         
         # results 딕셔너리 생성
         self.results = {

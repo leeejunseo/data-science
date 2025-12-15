@@ -286,12 +286,31 @@ class Radar6DOFSimulator:
         # 공력을 관성 좌표계로 변환
         F_aero_inertial = DCM @ F_aero_body
         
-        # 현재 질량 (연소 완료 후 건조질량으로 고정)
-        mass_current = self.mass_dry
+        # 현재 질량 계산 (연료 소모 고려)
+        if t <= self.burn_time:
+            mass_current = self.mass - (self.propellant_mass / self.burn_time) * t
+        else:
+            mass_current = self.mass_dry
+        
+        # 질량이 건조질량 이하로 떨어지지 않도록 제한
+        mass_current = max(mass_current, self.mass_dry)
         
         # 추력 계산 (동체 좌표계, X축 방향)
-        # 주의: 추력 단계 생략, 자유비행만 시뮬레이션 (연소 완료 후 상태)
-        F_thrust_inertial = np.array([0, 0, 0])
+        if t <= self.burn_time:
+            # 고도에 따른 비추력 보간 (해수면 → 진공)
+            altitude_factor = min(1.0, Z / 50000)  # 50km 이상에서 진공 비추력
+            isp_current = self.isp_sea + (self.isp_vacuum - self.isp_sea) * altitude_factor
+            
+            # 추력 = ISP × 연료소모율 × g
+            mdot = self.propellant_mass / self.burn_time  # 연료 소모율 (kg/s)
+            T_mag = isp_current * mdot * self.g
+            
+            # 추력 벡터 (동체 좌표계 X축 방향)
+            F_thrust_body = np.array([T_mag, 0, 0])
+            # 관성 좌표계로 변환
+            F_thrust_inertial = DCM @ F_thrust_body
+        else:
+            F_thrust_inertial = np.array([0, 0, 0])
         
         # 중력 (관성 좌표계, Z축 하향)
         F_grav = np.array([0, 0, -mass_current * self.g])
@@ -338,14 +357,13 @@ class Radar6DOFSimulator:
         elevation = np.deg2rad(elevation_deg)
         azimuth = np.deg2rad(azimuth_deg)
         
-        # 초기 속도 (m/s) - 연소 완료 후 속도로 시작
-        # 추력 단계는 생략하고 자유비행만 시뮬레이션
-        V0 = 2800.0  # 연소 완료 후 최종 속도 (교수님 코드 참조)
+        # 초기 속도 (m/s) - 발사대에서 낮은 속도로 시작
+        V0 = 10.0  # 발사 순간 작은 초기 속도
         
-        # 초기 위치 (원점에서 약간 위)
+        # 초기 위치 (발사대)
         X0 = 0.0
         Y0 = 0.0
-        Z0 = 100.0  # 발사대 높이
+        Z0 = 10.0  # 발사대 높이
         
         # 초기 속도 성분 (발사 방향)
         Vx0 = V0 * np.cos(elevation) * np.sin(azimuth)  # 동쪽
