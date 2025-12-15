@@ -141,6 +141,10 @@ class Radar6DOFSimulator:
             "C_m_q": -0.80,
             "C_n_r": -0.80,
             "C_l_p": -0.50,
+            "propellant_mass": 5000,
+            "burn_time": 80,
+            "isp_sea": 225,
+            "isp_vacuum": 248,
         },
         "KN-23": {
             "mass_avg": 1750,
@@ -154,6 +158,10 @@ class Radar6DOFSimulator:
             "C_m_q": -0.85,
             "C_n_r": -0.85,
             "C_l_p": -0.55,
+            "propellant_mass": 2500,
+            "burn_time": 60,
+            "isp_sea": 240,
+            "isp_vacuum": 264,
         },
         "Nodong": {
             "mass_avg": 6000,
@@ -167,6 +175,10 @@ class Radar6DOFSimulator:
             "C_m_q": -0.75,
             "C_n_r": -0.75,
             "C_l_p": -0.45,
+            "propellant_mass": 8000,
+            "burn_time": 110,
+            "isp_sea": 220,
+            "isp_vacuum": 242,
         }
     }
     
@@ -196,6 +208,13 @@ class Radar6DOFSimulator:
         self.C_m_q = self.params["C_m_q"]
         self.C_n_r = self.params["C_n_r"]
         self.C_l_p = self.params["C_l_p"]
+        
+        # 추력 파라미터
+        self.propellant_mass = self.params["propellant_mass"]
+        self.burn_time = self.params["burn_time"]
+        self.isp_sea = self.params["isp_sea"]
+        self.isp_vacuum = self.params["isp_vacuum"]
+        self.mass_dry = self.mass - self.propellant_mass  # 건조 질량
         
         self.g = 9.80665
     
@@ -267,14 +286,21 @@ class Radar6DOFSimulator:
         # 공력을 관성 좌표계로 변환
         F_aero_inertial = DCM @ F_aero_body
         
+        # 현재 질량 (연소 완료 후 건조질량으로 고정)
+        mass_current = self.mass_dry
+        
+        # 추력 계산 (동체 좌표계, X축 방향)
+        # 주의: 추력 단계 생략, 자유비행만 시뮬레이션 (연소 완료 후 상태)
+        F_thrust_inertial = np.array([0, 0, 0])
+        
         # 중력 (관성 좌표계, Z축 하향)
-        F_grav = np.array([0, 0, -self.mass * self.g])
+        F_grav = np.array([0, 0, -mass_current * self.g])
         
         # 총 힘
-        F_total = F_aero_inertial + F_grav
+        F_total = F_aero_inertial + F_grav + F_thrust_inertial
         
         # 관성 좌표계 가속도 (뉴턴 제2법칙)
-        accel_inertial = F_total / self.mass
+        accel_inertial = F_total / mass_current
         
         # 오일러 회전 방정식 (동체 좌표계 각가속도)
         p_dot = (L_roll + (self.I_yy - self.I_zz) * q * r) / self.I_xx
@@ -312,15 +338,16 @@ class Radar6DOFSimulator:
         elevation = np.deg2rad(elevation_deg)
         azimuth = np.deg2rad(azimuth_deg)
         
-        # 초기 속도 (m/s)
-        V0 = 1500.0
+        # 초기 속도 (m/s) - 연소 완료 후 속도로 시작
+        # 추력 단계는 생략하고 자유비행만 시뮬레이션
+        V0 = 2800.0  # 연소 완료 후 최종 속도 (교수님 코드 참조)
         
         # 초기 위치 (원점에서 약간 위)
         X0 = 0.0
         Y0 = 0.0
-        Z0 = 100.0
+        Z0 = 100.0  # 발사대 높이
         
-        # 초기 속도 성분 (구면 좌표계에서 변환)
+        # 초기 속도 성분 (발사 방향)
         Vx0 = V0 * np.cos(elevation) * np.sin(azimuth)  # 동쪽
         Vy0 = V0 * np.cos(elevation) * np.cos(azimuth)  # 북쪽
         Vz0 = V0 * np.sin(elevation)  # 상승

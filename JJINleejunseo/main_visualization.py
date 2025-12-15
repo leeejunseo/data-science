@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 6DOF 미사일 시각화 시스템
-main_fixed.py 기반 + NPZ 저장/로드 기능 추가
+radar_6dof_simulator.py 기반 + NPZ 저장/로드 기능 추가
 """
 import os
 os.environ["QT_QPA_PLATFORM"] = "xcb"
@@ -12,13 +12,19 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import datetime
-import config_6dof as cfg
+from scipy.integrate import solve_ivp
 
-# main_fixed.py의 시뮬레이션 클래스 사용
-from main_fixed import MissileSimulation6DOF
+# radar_6dof_simulator 사용
+from radar_6dof_simulator import Radar6DOFSimulator
 
 # NPZ I/O 모듈
-from trajectory_io import save_trajectory, load_trajectory, validate_trajectory
+try:
+    from trajectory_io import save_trajectory, load_trajectory, validate_trajectory
+except ImportError:
+    print("⚠ trajectory_io 모듈 없음. NPZ 저장/로드 기능 비활성화")
+    save_trajectory = None
+    load_trajectory = None
+    validate_trajectory = None
 
 # matplotlib 설정
 plt.rcParams['axes.unicode_minus'] = False
@@ -27,7 +33,7 @@ plt.rcParams['axes.unicode_minus'] = False
 class MissileVisualization6DOF:
     """
     6DOF 미사일 시각화 클래스
-    - 시뮬레이션 실행 (main_fixed.py의 MissileSimulation6DOF 사용)
+    - 시뮬레이션 실행 (radar_6dof_simulator.py의 Radar6DOFSimulator 사용)
     - NPZ 저장/로드
     - 12-subplot 그래프 생성
     """
@@ -37,13 +43,14 @@ class MissileVisualization6DOF:
         self.missile_type = missile_type
         self.results = None
         self.npz_path = None
+        self.sol = None
         
-        # main_fixed.py의 시뮬레이션 객체 생성
-        self.sim = MissileSimulation6DOF(missile_type=missile_type, apply_errors=False)
+        # radar_6dof_simulator 객체 생성
+        self.sim = Radar6DOFSimulator(missile_type=missile_type)
     
     def run_simulation(self, launch_angle_deg=45, azimuth_deg=90, sim_time=600):
         """
-        6DOF 시뮬레이션 실행 (main_fixed.py의 MissileSimulation6DOF 사용)
+        6DOF 시뮬레이션 실행 (radar_6dof_simulator.py 사용)
         
         Parameters:
         -----------
@@ -64,19 +71,34 @@ class MissileVisualization6DOF:
         print(f"발사각: {launch_angle_deg}°, 방위각: {azimuth_deg}°")
         print("=" * 60)
         
-        # main_fixed.py의 시뮬레이션 실행
-        self.sim.initialize_simulation(
-            launch_angle_deg=launch_angle_deg,
-            azimuth_deg=azimuth_deg,
-            sim_time=sim_time
-        )
-        
-        # 시뮬레이션 실행 (run_simulation 메서드 사용)
         try:
-            self.sim.run_simulation()
+            # 초기 상태 생성
+            state0 = self.sim.create_initial_state(launch_angle_deg, azimuth_deg)
             
-            # 결과 복사
-            self.results = self.sim.results.copy()
+            # 지면 충돌 이벤트
+            def ground_impact(t, state):
+                return state[2]  # Z < 0
+            ground_impact.terminal = True
+            ground_impact.direction = -1
+            
+            # solve_ivp로 시뮬레이션 실행
+            self.sol = solve_ivp(
+                self.sim.dynamics,
+                (0, sim_time),
+                state0,
+                events=[ground_impact],
+                method='RK45',
+                max_step=0.1,
+                rtol=1e-8,
+                atol=1e-10
+            )
+            
+            if not self.sol.success:
+                print(f"⚠ 시뮬레이션 실패: {self.sol.message}")
+                return False
+            
+            # 결과를 main_visualization 형식으로 변환
+            self._convert_results()
             
             # 요약 정보
             final_time = self.results['time'][-1]
@@ -99,6 +121,83 @@ class MissileVisualization6DOF:
             traceback.print_exc()
             return False
     
+    def _convert_results(self):
+        """
+        solve_ivp 결과를 main_visualization 형식으로 변환
+        상태 벡터: [X, Y, Z, Vx, Vy, Vz, phi, theta, psi, p, q, r]
+        """
+        t = self.sol.t
+        y = self.sol.y
+        
+        # 위치 (m)
+        X = y[0, :]
+        Y = y[1, :]
+        Z = y[2, :]  # 고도
+        
+        # 속도 (m/s)
+        Vx = y[3, :]
+        Vy = y[4, :]
+        Vz = y[5, :]
+        V_mag = np.sqrt(Vx**2 + Vy**2 + Vz**2)
+        
+        # 오일러각 (rad)
+        phi = y[6, :]
+        theta = y[7, :]
+        psi = y[8, :]  # 요 각도
+        
+        # 각속도 (rad/s)
+        p = y[9, :]
+        q = y[10, :]
+        r = y[11, :]
+        
+        # 비행경로각 gamma, 방위각 chi 계산
+        V_horizontal = np.sqrt(Vx**2 + Vy**2)
+        gamma = np.arctan2(Vz, V_horizontal)  # 비행경로각
+        chi = np.arctan2(Vx, Vy)  # 방위각 (동쪽 기준)
+        
+        # 받음각, 옆미끄럼각 계산 (근사)
+        alpha = theta - gamma
+        beta = np.zeros_like(t)  # 단순화
+        
+        # 마하수
+        mach = V_mag / 340.0
+        
+        # 질량 및 연료 계산 (동적)
+        mass = np.zeros_like(t)
+        fuel = np.zeros_like(t)
+        
+        for i, time in enumerate(t):
+            if time <= self.sim.burn_time:
+                # 연소 중: 질량 감소
+                mass[i] = self.sim.mass - (self.sim.propellant_mass / self.sim.burn_time) * time
+                fuel[i] = self.sim.propellant_mass - (self.sim.propellant_mass / self.sim.burn_time) * time
+            else:
+                # 연소 완료: 건조 질량
+                mass[i] = self.sim.mass_dry
+                fuel[i] = 0
+        
+        # results 딕셔너리 생성
+        self.results = {
+            'time': t,
+            'x': X,
+            'y': Y,
+            'h': Z,  # 고도
+            'velocity': V_mag,
+            'gamma': gamma,
+            'psi': chi,  # 방위각
+            'phi': phi,
+            'theta': theta,
+            'psi_euler': psi,  # 오일러 요각
+            'p': p,
+            'q': q,
+            'r': r,
+            'alpha': alpha,
+            'beta': beta,
+            'mach': mach,
+            'mass': mass,
+            'fuel': fuel
+        }
+    
     def save_to_npz(self, filepath=None, launch_angle_deg=45):
         """
         결과를 NPZ 파일로 저장
@@ -119,8 +218,13 @@ class MissileVisualization6DOF:
             print("⚠ 먼저 시뮬레이션을 실행하세요.")
             return None
         
+        if save_trajectory is None:
+            print("⚠ trajectory_io 모듈이 없어 NPZ 저장 불가")
+            return None
+        
         # 파일 경로 자동 생성
         if filepath is None:
+            os.makedirs('results_6dof', exist_ok=True)
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             filepath = f"results_6dof/{self.missile_type}_{launch_angle_deg}deg_{timestamp}.npz"
         
@@ -394,12 +498,12 @@ class MissileVisualization6DOF:
 def main():
     """메인 함수"""
     print("\n" + "=" * 60)
-    print("6DOF 미사일 시각화 시스템")
+    print("6DOF 미사일 시각화 시스템 (radar_6dof_simulator 기반)")
     print("=" * 60 + "\n")
     
     # 미사일 선택
     print("미사일 종류:")
-    missile_list = list(cfg.MISSILE_TYPES.keys())
+    missile_list = list(Radar6DOFSimulator.MISSILE_PARAMS.keys())
     for i, name in enumerate(missile_list, 1):
         print(f"  {i}. {name}")
     
