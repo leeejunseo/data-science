@@ -123,9 +123,26 @@ class MissileVisualization6DOF:
         mass = sim_results['mass']
         mach = sim_results['mach']
         
-        # 받음각 계산 (theta - gamma)
-        alpha = theta - gamma
+        # 받음각 계산
+        # CRITICAL: missile_6dof에서 이미 계산했으면 그대로 사용!
+        if 'alpha' in sim_results:
+            alpha = sim_results['alpha']  # missile_6dof에서 계산된 값 사용
+        else:
+            alpha = theta - gamma  # fallback (근사)
         beta = np.zeros_like(t)  # 단순화
+        
+        # CRITICAL: Theta wrapping (-180° ~ 180°)
+        # gamma는 계속 감소하므로 theta도 누적됨 (예: 45° → 233°)
+        # 시각화를 위해 -π ~ π 범위로 wrap
+        def wrap_angle(angle):
+            """각도를 -π ~ π 범위로 wrap"""
+            while angle > np.pi:
+                angle -= 2 * np.pi
+            while angle < -np.pi:
+                angle += 2 * np.pi
+            return angle
+        
+        theta_wrapped = np.array([wrap_angle(th) for th in theta])
         
         # 연료 (초기 질량 - 현재 질량)
         fuel = mass[0] - mass
@@ -140,7 +157,7 @@ class MissileVisualization6DOF:
             'gamma': gamma,
             'psi': psi,
             'phi': phi,
-            'theta': theta,
+            'theta': theta_wrapped,  # ✅ Wrapped!
             'psi_euler': psi,  # 오일러 요각 (같은 값 사용)
             'p': p,
             'q': q,
