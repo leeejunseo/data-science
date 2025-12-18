@@ -415,7 +415,7 @@ const KoreaMissileUI = () => {
         
         // 레이더가 미사일을 지나간 후 일정 각도(150도) 동안 표시
         let angleDiff = (scanAngleDeg - missileAngleDeg + 360) % 360;
-        const isVisible = angleDiff < 150; // 스캔 후 150도 범위 내에서 보임
+        const isVisible = angleDiff < 150;
         const fadeOpacity = isVisible ? Math.max(0, 1 - angleDiff / 150) : 0;
         
         if (isVisible && fadeOpacity > 0) {
@@ -424,7 +424,7 @@ const KoreaMissileUI = () => {
             const missileSize = 60;
             
             // 미사일 방향 계산 (궤적 방향)
-            let angle = -Math.PI / 2; // 기본 위쪽
+            let angle = -Math.PI / 2;
             if (lastIdx > 0) {
               const prevX = launchX + simulationResults.x[lastIdx - 1] * scale;
               const prevY = launchY - simulationResults.y[lastIdx - 1] * scale;
