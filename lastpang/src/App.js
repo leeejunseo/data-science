@@ -17,12 +17,20 @@ const KoreaMissileUI = () => {
   const [lastMouse, setLastMouse] = useState({ x: 0, y: 0 });
   const [radarAngle, setRadarAngle] = useState(0);
   const [mapImage, setMapImage] = useState(null);
+  const [missileImage, setMissileImage] = useState(null);
 
   // 한반도 지도 이미지 로드
   useEffect(() => {
     const img = new Image();
     img.src = '/image.png';
     img.onload = () => setMapImage(img);
+  }, []);
+
+  // 미사일 이미지 로드
+  useEffect(() => {
+    const img = new Image();
+    img.src = '/missile.svg';
+    img.onload = () => setMissileImage(img);
   }, []);
 
   // 이미지 기준 도시 좌표 (image.png 기준으로 조정)
@@ -67,7 +75,7 @@ const KoreaMissileUI = () => {
   // 레이더 회전 애니메이션
   useEffect(() => {
     const interval = setInterval(() => {
-      setRadarAngle(prev => (prev + 2) % 360);
+      setRadarAngle(prev => (prev + 5) % 360);
     }, 30);
     return () => clearInterval(interval);
   }, []);
@@ -279,14 +287,15 @@ const KoreaMissileUI = () => {
     
     // 회전하는 스캔 라인 (그라데이션 효과)
     const scanAngle = radarAngle * Math.PI / 180;
-    const gradient = ctx.createConicalGradient ? null : ctx.createLinearGradient(cx, cy, cx + radius * Math.cos(scanAngle), cy + radius * Math.sin(scanAngle));
+    const scanCenterY = cy + 100; // 스캔 중심을 아래로 이동
+    const gradient = ctx.createConicalGradient ? null : ctx.createLinearGradient(cx, scanCenterY, cx + radius * Math.cos(scanAngle), scanCenterY + radius * Math.sin(scanAngle));
     
     // 스캔 영역 (부채꼴)
     ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, radius, scanAngle - 0.5, scanAngle, false);
+    ctx.moveTo(cx, scanCenterY);
+    ctx.arc(cx, scanCenterY, radius, scanAngle - 0.5, scanAngle, false);
     ctx.closePath();
-    const scanGradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    const scanGradient = ctx.createRadialGradient(cx, scanCenterY, 0, cx, scanCenterY, radius);
     scanGradient.addColorStop(0, 'rgba(0, 255, 0, 0.3)');
     scanGradient.addColorStop(1, 'rgba(0, 255, 0, 0.1)');
     ctx.fillStyle = scanGradient;
@@ -294,8 +303,8 @@ const KoreaMissileUI = () => {
     
     // 스캔 라인
     ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + radius * Math.cos(scanAngle), cy + radius * Math.sin(scanAngle));
+    ctx.moveTo(cx, scanCenterY);
+    ctx.lineTo(cx + radius * Math.cos(scanAngle), scanCenterY + radius * Math.sin(scanAngle));
     ctx.strokeStyle = '#00ff00';
     ctx.lineWidth = 2;
     ctx.stroke();
@@ -398,20 +407,55 @@ const KoreaMissileUI = () => {
         const missileX = launchX + simulationResults.x[lastIdx] * scale;
         const missileY = launchY - simulationResults.y[lastIdx] * scale;
         
-        // 깜빡이는 미사일 표시
-        ctx.beginPath();
-        ctx.arc(missileX, missileY, 8, 0, Math.PI * 2);
-        ctx.fillStyle = '#ff0000';
-        ctx.fill();
-        ctx.strokeStyle = '#ff0000';
-        ctx.lineWidth = 3;
-        ctx.stroke();
+        // 미사일 위치의 각도 계산 (스캔 중심 기준)
+        const scanCenterY = cy + 100;
+        const missileAngle = Math.atan2(missileY - scanCenterY, missileX - cx);
+        const missileAngleDeg = ((missileAngle * 180 / Math.PI) + 360) % 360;
+        const scanAngleDeg = radarAngle;
         
-        // 미사일 주변 링
-        ctx.beginPath();
-        ctx.arc(missileX, missileY, 15 + 5 * Math.sin(Date.now() / 100), 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-        ctx.stroke();
+        // 레이더가 미사일을 지나간 후 일정 각도(150도) 동안 표시
+        let angleDiff = (scanAngleDeg - missileAngleDeg + 360) % 360;
+        const isVisible = angleDiff < 150; // 스캔 후 150도 범위 내에서 보임
+        const fadeOpacity = isVisible ? Math.max(0, 1 - angleDiff / 150) : 0;
+        
+        if (isVisible && fadeOpacity > 0) {
+          // 미사일 이미지 표시
+          if (missileImage) {
+            const missileSize = 60;
+            
+            // 미사일 방향 계산 (궤적 방향)
+            let angle = -Math.PI / 2; // 기본 위쪽
+            if (lastIdx > 0) {
+              const prevX = launchX + simulationResults.x[lastIdx - 1] * scale;
+              const prevY = launchY - simulationResults.y[lastIdx - 1] * scale;
+              angle = Math.atan2(missileY - prevY, missileX - prevX) + Math.PI / 2;
+            }
+            
+            ctx.save();
+            ctx.globalAlpha = fadeOpacity;
+            ctx.translate(missileX, missileY);
+            ctx.rotate(angle);
+            ctx.drawImage(missileImage, -missileSize / 2, -missileSize / 2, missileSize, missileSize);
+            ctx.restore();
+          } else {
+            // 이미지 로드 전 대체 표시
+            ctx.globalAlpha = fadeOpacity;
+            ctx.beginPath();
+            ctx.arc(missileX, missileY, 8, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff0000';
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+          
+          // 미사일 주변 링 (깜빡임 효과)
+          ctx.globalAlpha = fadeOpacity * 0.6;
+          ctx.beginPath();
+          ctx.arc(missileX, missileY, 20 + 5 * Math.sin(Date.now() / 100), 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 100, 0, 1)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
       }
       
       ctx.restore();
@@ -559,7 +603,7 @@ const KoreaMissileUI = () => {
     if (simulationResults && currentFrame < simulationResults.x.length) {
       const timer = setTimeout(() => {
         setCurrentFrame(prev => prev + 1);
-      }, 50);
+      }, 20);
       return () => clearTimeout(timer);
     }
   }, [simulationResults, currentFrame]);
