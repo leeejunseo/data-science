@@ -24,8 +24,8 @@ try:
     import config as cfg
     CONFIG_LOADED = True
     print("✓ config.py 로드")
-except:
-    print("✗ config.py 로드 실패 - 기본값 사용")
+except (ImportError, ModuleNotFoundError) as e:
+    print(f"✗ config.py 로드 실패 - 기본값 사용 ({e})")
     CONFIG_LOADED = False
     class cfg:
         G = 9.80665
