@@ -32,6 +32,12 @@ def save_trajectory(
     V: np.ndarray = None,      # 속도 크기 (m/s)
     gamma: np.ndarray = None,  # 비행경로각 (rad)
     chi: np.ndarray = None,    # 방위각 (rad)
+    # 시그니처 분석용 추가 데이터
+    a_x: np.ndarray = None,    # 관성 좌표계 가속도 (m/s^2)
+    a_y: np.ndarray = None,
+    a_z: np.ndarray = None,
+    E_s: np.ndarray = None,    # 비에너지 (m)
+    q_dyn: np.ndarray = None,  # 동압 (Pa)
     # 메타데이터
     missile_type: str = "Unknown",
     launch_angle: float = 0.0,
@@ -104,6 +110,35 @@ def save_trajectory(
             gamma = np.zeros_like(u) if gamma is None else gamma
             chi = np.zeros_like(u) if chi is None else chi
     
+    # 시그니처 분석용 데이터 자동 계산 (제공되지 않은 경우)
+    G0 = 9.80665
+    
+    if a_x is None or a_z is None:
+        # 관성 좌표계 가속도 계산
+        V_x = np.gradient(position_x, time)
+        V_z = np.gradient(position_z, time)
+        a_x = np.gradient(V_x, time) if a_x is None else a_x
+        a_z = np.gradient(V_z, time) if a_z is None else a_z
+        a_y = np.zeros_like(time) if a_y is None else a_y
+    
+    if E_s is None:
+        # 비에너지 계산: E_s = h + V^2/(2g)
+        E_s = position_z + (V**2) / (2 * G0)
+    
+    if q_dyn is None:
+        # 동압 계산 (ISA 모델)
+        q_dyn = np.zeros_like(time)
+        for i in range(len(time)):
+            h = position_z[i]
+            if h < 11000:
+                T = 288.15 - 0.0065 * h
+                P = 101325 * (T / 288.15) ** 5.2561
+            else:
+                T = 216.65
+                P = 22632 * np.exp(-0.00015769 * (h - 11000))
+            rho = P / (287.05 * T)
+            q_dyn[i] = 0.5 * rho * V[i]**2
+    
     # 저장 데이터 구성
     save_dict = {
         # 시간
@@ -122,6 +157,10 @@ def save_trajectory(
         'mass': mass,
         # Trajectory Frame
         'V': V, 'gamma': gamma, 'chi': chi,
+        # 시그니처 분석용
+        'a_x': a_x, 'a_y': a_y, 'a_z': a_z,
+        'E_s': E_s,
+        'q_dyn': q_dyn,
         # 메타데이터
         'missile_type': missile_type,
         'launch_angle': launch_angle,

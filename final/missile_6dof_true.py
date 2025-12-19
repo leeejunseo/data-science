@@ -25,8 +25,10 @@ State Vector (13D):
 import numpy as np
 from scipy.integrate import solve_ivp
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 import warnings
+import pandas as pd
+from pathlib import Path
 
 
 # ============================================================================
@@ -272,10 +274,10 @@ MISSILES = {
         isp_sea=250,              # s (고체)
         isp_vac=265,              # s
         burn_time=35,             # s (고체는 더 짧음)
-        vertical_time=5,
-        pitch_time=8,
+        vertical_time=1,          # KN-23: 초단기 수직 비행 (편평 탄도 강화)
+        pitch_time=4,             # KN-23: 더 빠른 피치오버
         pitch_angle=25 * np.pi/180,
-        C_m_alpha=-2.5,
+        C_m_alpha=-2.0,           # KN-23: 상향 조정 (저고도 고속 안정성)
         C_mq=-100.0,
         C_lp=-28.0,
     ),
@@ -398,8 +400,20 @@ class True6DOFSimulator:
         
         return isp * mdot * G0
     
-    def get_flight_phase(self, t: float) -> str:
-        """Determine current flight phase"""
+    def get_flight_phase(self, t: float, altitude: float = None) -> str:
+        """
+        Determine current flight phase
+        
+        KN-23 특수 단계:
+        - Pull-up: 하강 중 40~30km 구간에서 활공 기동
+        """
+        # KN-23 Pull-up 단계 확인 (편평 탄도: 정점 50km 내외)
+        if self.missile_type == "KN-23" and altitude is not None:
+            is_descending = getattr(self, '_is_descending', False)
+            # 편평 탄도: 20~45km에서 Pull-up 구간
+            if is_descending and 20000 <= altitude <= 45000:
+                return "Pull-up"
+        
         if t < self.cfg.vertical_time:
             return "Vertical"
         elif t < self.cfg.vertical_time + self.cfg.pitch_time:
@@ -459,53 +473,179 @@ class True6DOFSimulator:
             return 0.0
     
     def compute_tvc_moment(self, t: float, theta: float, q_rate: float, 
-                          thrust: float) -> float:
+                          thrust: float, alpha: float = 0.0, q_dyn: float = 0.0,
+                          altitude: float = 0.0, gamma: float = 0.0) -> float:
         """
         Compute TVC control moment for pitch channel
         
-        Pitch program + rate damping
-        Continue pitching during Gravity Turn until target elevation reached
+        개선사항:
+        1. Gravity Turn에서 속도 벡터 추종 (alpha → 0)
+        2. 받음각 10° 제한
+        3. 동압 기반 가변 게인 (재진입 안정화)
+        4. KN-23 전용: 전 구간 RCS 자세 제어 + Pull-up 기동
         
         Returns: M_pitch [N·m]
         """
+        m, I_xx, I_yy, I_zz = self.get_mass_properties(t)
+        phase = self.get_flight_phase(t, altitude)
+        target_elevation = getattr(self, 'target_elevation', np.pi/4)
+        
+        # 받음각 제한 (10° = 0.1745 rad)
+        ALPHA_MAX = 10.0 * np.pi / 180
+        
+        # ================================================================
+        # KN-23 전용 제어 로직
+        # ================================================================
+        if self.missile_type == "KN-23":
+            return self._compute_kn23_moment(t, theta, q_rate, thrust, alpha, 
+                                             q_dyn, altitude, gamma, phase,
+                                             m, I_yy, ALPHA_MAX)
+        
+        # ================================================================
+        # 일반 미사일 제어 로직
+        # ================================================================
         if thrust < 100:
             return 0.0
-        
-        phase = self.get_flight_phase(t)
-        target_elevation = getattr(self, 'target_elevation', np.pi/4)
-        m, I_xx, I_yy, I_zz = self.get_mass_properties(t)
         
         # Feedforward pitch rate command
         if phase == "Vertical":
             q_cmd = 0.0
             
         elif phase == "Pitch":
-            # Constant pitch rate to reach target
             pitch_range = np.pi/2 - target_elevation
             q_cmd = -pitch_range / self.cfg.pitch_time
             
         elif phase == "Gravity Turn":
-            # Continue pitching if not yet at target elevation
-            if theta > target_elevation + 0.02:  # ~1 degree tolerance
-                # Slower rate during gravity turn
-                q_cmd = -0.03  # ~1.7 deg/s nose-down
-            else:
-                q_cmd = 0.0
+            K_alpha = 2.0
+            q_cmd = -K_alpha * alpha
+            
+            if abs(alpha) > ALPHA_MAX:
+                q_cmd = -3.0 * np.sign(alpha) * (abs(alpha) - ALPHA_MAX * 0.5)
         else:
             return 0.0
         
-        # Rate tracking: M = K * (q_cmd - q_rate)
-        # K = I * omega_n where omega_n is desired bandwidth
-        omega_n = 3.0  # 3 rad/s bandwidth
+        # 동압 기반 가변 게인
+        q_dyn_ref = 50000
+        gain_scale = 1.0 / (1.0 + q_dyn / q_dyn_ref)
+        
+        omega_n = 3.0 * gain_scale
         K_rate = I_yy * omega_n
         
         M_tvc = K_rate * (q_cmd - q_rate)
         
-        # Limit to TVC authority
+        # TVC 권한 제한
         M_max = thrust * self.cfg.tvc_moment_arm * np.sin(self.cfg.tvc_max_angle)
         M_tvc = np.clip(M_tvc, -M_max, M_max)
         
         return M_tvc
+    
+    def _compute_kn23_moment(self, t: float, theta: float, q_rate: float,
+                             thrust: float, alpha: float, q_dyn: float,
+                             altitude: float, gamma: float, phase: str,
+                             m: float, I_yy: float, ALPHA_MAX: float) -> float:
+        """
+        KN-23 전용 제어 모멘트 계산
+        
+        특징:
+        1. 편평 탄도: 빠른 피치오버, 낮은 정점 고도 (50~60km)
+        2. 전 구간 RCS 자세 제어: 추력 유무와 무관하게 받음각 제한
+        3. Pull-up 시그니처: 하강 중 40~30km에서 활공 기동
+        """
+        target_elevation = getattr(self, 'target_elevation', np.pi/4)
+        
+        # ================================================================
+        # 1. 기본 제어: 속도 벡터 추종 (alpha → 0)
+        # ================================================================
+        K_alpha = 6.0  # KN-23: 강화된 받음각 추종 게인
+        q_cmd_alpha = -K_alpha * alpha
+        
+        # 받음각 10° 제한 강화
+        if abs(alpha) > ALPHA_MAX:
+            q_cmd_alpha = -10.0 * np.sign(alpha) * (abs(alpha) - ALPHA_MAX * 0.3)
+        
+        # ================================================================
+        # 2. 비행 단계별 제어 (받음각 제한과 병행)
+        # ================================================================
+        if phase == "Vertical":
+            q_cmd = 0.0
+            
+        elif phase == "Pitch":
+            # KN-23: 편평 탄도를 위한 피치오버
+            # 정점 고도 50km 내외를 위해 발사각보다 낮은 피치각으로 유도
+            # 발사각 - 25°로 피치다운 (최소 5°)
+            depressed_target = target_elevation - 25 * np.pi / 180
+            depressed_target = max(depressed_target, 5 * np.pi / 180)  # 최소 5°
+            pitch_range = np.pi/2 - depressed_target
+            q_cmd_pitch = -pitch_range / self.cfg.pitch_time * 2.5
+            
+            # 피치 명령과 받음각 제한 병행 (받음각 우선)
+            if abs(alpha) > ALPHA_MAX * 0.6:
+                q_cmd = q_cmd_alpha  # 받음각 제한 우선
+            else:
+                q_cmd = q_cmd_pitch
+        
+        elif phase == "Gravity Turn":
+            # KN-23: Gravity Turn에서 속도 벡터 추종 (받음각 제한 우선)
+            q_cmd = q_cmd_alpha
+        
+        elif phase == "Ballistic":
+            # 속도 벡터 추종 (받음각 제한)
+            q_cmd = q_cmd_alpha
+            
+        elif phase == "Pull-up":
+            # ================================================================
+            # 3. Pull-up 시그니처: 하강 중 일시적 상향 피치
+            # ================================================================
+            # 풀업 강도 1.5배 강화 (0.10 -> 0.15)
+            pullup_intensity = 0.15  # Pull-up 강도 강화
+            
+            # 고도에 따른 가변 강도 (편평 탄도: 더 낮은 고도에서 Pull-up)
+            if altitude > 30000:
+                intensity_scale = (45000 - altitude) / 15000
+            else:
+                intensity_scale = (altitude - 20000) / 10000
+            intensity_scale = np.clip(intensity_scale, 0, 1)
+            
+            # Pull-up + 받음각 제한 병행
+            q_cmd_pullup = pullup_intensity * intensity_scale
+            
+            if abs(alpha) < ALPHA_MAX * 0.7:
+                q_cmd = q_cmd_alpha + q_cmd_pullup
+            else:
+                q_cmd = q_cmd_alpha
+        
+        else:
+            # 기타 구간: 받음각 제한
+            q_cmd = q_cmd_alpha
+        
+        # ================================================================
+        # 4. RCS 모멘트 계산 (전 구간 활성)
+        # ================================================================
+        # 동압 기반 가변 게인
+        q_dyn_ref = 30000  # KN-23: 더 낮은 기준 동압
+        gain_scale = 1.0 / (1.0 + q_dyn / q_dyn_ref)
+        
+        # TVC 구간 (thrust > 100)
+        if thrust > 100:
+            omega_n = 5.0 * gain_scale  # KN-23: 더 높은 대역폭
+            K_rate = I_yy * omega_n
+            M_control = K_rate * (q_cmd - q_rate)
+            
+            # TVC 권한 제한
+            M_max = thrust * self.cfg.tvc_moment_arm * np.sin(self.cfg.tvc_max_angle)
+            M_control = np.clip(M_control, -M_max, M_max)
+        else:
+            # RCS 구간 (추력 없음): 가상 RCS 제어
+            # KN-23은 기동성 탄두로 강력한 RCS 보유
+            omega_n = 4.0 * gain_scale  # 강화된 RCS 대역폭
+            K_rate = I_yy * omega_n
+            M_control = K_rate * (q_cmd - q_rate)
+            
+            # RCS 권한 제한 (기동성 탄두: 더 큰 RCS 권한)
+            M_max_rcs = 0.3 * m * 9.81 * self.cfg.length * 0.4  # 강화된 RCS
+            M_control = np.clip(M_control, -M_max_rcs, M_max_rcs)
+        
+        return M_control
     
     def get_theta_target(self, t: float) -> float:
         """Get target pitch angle for current time"""
@@ -622,8 +762,22 @@ class True6DOFSimulator:
         M_aero_yaw = N_static + N_damp
         M_aero_roll = L_damp
         
-        # 2. TVC control moment (pitch only for now)
-        M_tvc = self.compute_tvc_moment(t, theta, q_rate, thrust)
+        # 2. TVC/RCS control moment
+        # KN-23: altitude, gamma 추가 전달하여 Pull-up 시그니처 구현
+        # 비행 경로각 (gamma) 계산
+        v_inertial_temp = C_bi @ np.array([u, v, w])
+        V_horizontal = np.sqrt(v_inertial_temp[0]**2 + v_inertial_temp[1]**2)
+        V_vertical = -v_inertial_temp[2]  # NED: -dz = 상승 속도
+        gamma = np.arctan2(V_vertical, max(V_horizontal, 0.1))
+        
+        # KN-23 하강 상태 추적 (Pull-up 트리거용)
+        if self.missile_type == "KN-23":
+            prev_alt = getattr(self, '_prev_altitude', altitude)
+            if altitude < prev_alt - 10:  # 10m 이상 하강
+                self._is_descending = True
+            self._prev_altitude = altitude
+        
+        M_tvc = self.compute_tvc_moment(t, theta, q_rate, thrust, alpha, q_dyn, altitude, gamma)
         
         # 3. Burnout disturbance
         M_disturbance = 0
@@ -705,22 +859,51 @@ class True6DOFSimulator:
         # Initial state - START VERTICAL, pitch over to elevation angle
         # theta = 90° = vertical in NED (body x points up = -z_ned)
         theta0 = np.pi/2  # Always start vertical
+        
+        # 초기각 점프 해결: azimuth를 정확히 설정
+        # NED 좌표계에서 azimuth 90° = East = y축 방향
+        # psi = 0이면 North(x축), psi = 90°이면 East(y축)
         psi0 = (90 - azimuth_deg) * np.pi/180
         
         # Store target elevation for flight program
         self.target_elevation = elevation_deg * np.pi/180
         
-        # Initial quaternion (vertical)
-        quat0 = quat_from_euler(0, theta0, psi0)
+        # 초기 쿼터니언 안정화: 수직 발사 시 직접 쿼터니언 계산
+        # theta = 90° (수직), psi = 0 (북쪽 방향)
+        # 오일러각 변환 대신 직접 쿼터니언 생성으로 점프 방지
+        # 수직 자세: body x축이 위를 향함 (NED z축의 반대)
+        # q = [cos(45°), 0, sin(45°), 0] for pitch 90°
+        c45 = np.cos(np.pi/4)
+        s45 = np.sin(np.pi/4)
+        
+        # Azimuth 회전 적용 (z축 회전)
+        c_psi = np.cos(psi0/2)
+        s_psi = np.sin(psi0/2)
+        
+        # 수직 자세 쿼터니언 (pitch 90°)
+        q_pitch = np.array([c45, 0, s45, 0])
+        
+        # Yaw 회전 쿼터니언
+        q_yaw = np.array([c_psi, 0, 0, s_psi])
+        
+        # 쿼터니언 곱셈: q_yaw * q_pitch
+        quat0 = np.array([
+            q_yaw[0]*q_pitch[0] - q_yaw[3]*q_pitch[2],
+            q_yaw[0]*q_pitch[1] + q_yaw[3]*q_pitch[3],
+            q_yaw[0]*q_pitch[2] + q_yaw[3]*q_pitch[0],
+            q_yaw[0]*q_pitch[3] - q_yaw[3]*q_pitch[1]
+        ])
+        quat0 = quat_normalize(quat0)
         
         # Initial body velocity (small forward velocity for stability)
-        u0 = 1.0
+        # 너무 작으면 수치 불안정, 너무 크면 초기 조건 왜곡
+        u0 = 0.1  # 감소: 초기 점프 완화
         
         state0 = np.array([
-            0, 0, 0,                    # Position
-            u0, 0, 0,                   # Body velocity
-            quat0[0], quat0[1], quat0[2], quat0[3],  # Quaternion
-            0, 0, 0                     # Angular rates
+            0, 0, 0,                    # Position (NED: z down)
+            u0, 0, 0,                   # Body velocity (작은 전진 속도)
+            quat0[0], quat0[1], quat0[2], quat0[3],  # Quaternion (정규화됨)
+            0, 0, 0                     # Angular rates (정지 상태에서 시작)
         ])
         
         # Integrate
@@ -783,6 +966,14 @@ class True6DOFSimulator:
             error = (range_km - ref) / ref * 100
             print(f"  Reference: {ref} km, Error: {error:+.1f}%")
         
+        # 받음각 계산
+        alpha_arr = np.arctan2(w, np.maximum(u, 0.1))
+        beta_arr = np.arcsin(np.clip(v / np.maximum(V, 0.1), -1, 1))
+        
+        # 최대 받음각 확인
+        max_alpha_deg = np.max(np.abs(alpha_arr)) * 180 / np.pi
+        print(f"  Max |alpha|: {max_alpha_deg:.1f}°")
+        
         return {
             'time': t,
             'x': x, 'y': y, 'z': altitude,  # Return altitude, not NED z
@@ -790,10 +981,259 @@ class True6DOFSimulator:
             'V': V,
             'phi': phi_arr, 'theta': theta_arr, 'psi': psi_arr,
             'p': p_arr, 'q': q_arr, 'r': r_arr,
+            'alpha': alpha_arr, 'beta': beta_arr,
             'range_km': range_km,
             'max_alt_km': max_alt_km,
             'flight_time': flight_time,
         }
+
+
+# ============================================================================
+# 데이터셋 추출 및 배치 시뮬레이션
+# ============================================================================
+
+def extract_results(sim_result: Dict, missile_type: str, elevation_deg: float,
+                    include_reference: bool = False) -> pd.DataFrame:
+    """
+    시뮬레이션 결과에서 시그니처 분석용 데이터를 추출
+    
+    포함 항목:
+    - 3축 가속도 (Body Frame: a_u, a_v, a_w)
+    - 3축 가속도 (관성 좌표계: a_x, a_y, a_z)
+    - 비에너지 (E_s = altitude + V^2/(2g))
+    - 이벤트 플래그 (Burn-out, Apogee)
+    
+    Args:
+        sim_result: True6DOFSimulator.simulate() 반환값
+        missile_type: 미사일 기종명
+        elevation_deg: 발사 고각 [deg]
+        include_reference: CD, 연료소모량 등 참조용 데이터 포함 여부
+        
+    Returns:
+        시그니처 분석용 DataFrame
+    """
+    t = sim_result['time']
+    n_points = len(t)
+    
+    # 기본 데이터 추출
+    x = sim_result['x']
+    y = sim_result['y']
+    altitude = sim_result['z']
+    
+    u = sim_result['u']
+    v = sim_result['v']
+    w = sim_result['w']
+    V = sim_result['V']
+    
+    phi = sim_result['phi']
+    theta = sim_result['theta']
+    psi = sim_result['psi']
+    
+    p = sim_result['p']
+    q = sim_result['q']
+    r = sim_result['r']
+    
+    alpha = sim_result.get('alpha', np.arctan2(w, np.maximum(u, 0.1)))
+    beta = sim_result.get('beta', np.arcsin(np.clip(v / np.maximum(V, 0.1), -1, 1)))
+    
+    # ================================================================
+    # 1. 가속도 계산 (Body Frame)
+    # ================================================================
+    a_u = np.gradient(u, t)  # Body x-axis acceleration
+    a_v = np.gradient(v, t)  # Body y-axis acceleration
+    a_w = np.gradient(w, t)  # Body z-axis acceleration
+    
+    # ================================================================
+    # 2. 관성 좌표계 가속도 계산
+    # ================================================================
+    V_x = np.gradient(x, t)
+    V_y = np.gradient(y, t)
+    V_z = np.gradient(altitude, t)
+    
+    a_x = np.gradient(V_x, t)
+    a_y = np.gradient(V_y, t)
+    a_z = np.gradient(V_z, t)
+    a_total = np.sqrt(a_x**2 + a_y**2 + a_z**2)
+    
+    # ================================================================
+    # 3. 비에너지 (Specific Energy) 계산
+    # ================================================================
+    E_s = altitude + (V**2) / (2 * G0)
+    
+    # ================================================================
+    # 4. 마하수 및 동압 계산
+    # ================================================================
+    mach = np.zeros(n_points)
+    q_dyn = np.zeros(n_points)
+    
+    for i in range(n_points):
+        rho, P, T, a = get_atmosphere(altitude[i])
+        mach[i] = V[i] / a
+        q_dyn[i] = 0.5 * rho * V[i]**2
+    
+    # ================================================================
+    # 5. 이벤트 플래그 생성
+    # ================================================================
+    cfg = MISSILES[missile_type]
+    
+    # Burn-out 플래그
+    flag_burnout = np.zeros(n_points, dtype=int)
+    burnout_idx = np.searchsorted(t, cfg.burn_time)
+    if burnout_idx < n_points:
+        flag_burnout[burnout_idx] = 1
+    
+    # Apogee 플래그
+    flag_apogee = np.zeros(n_points, dtype=int)
+    apogee_idx = np.argmax(altitude)
+    flag_apogee[apogee_idx] = 1
+    
+    # 비행 단계 (Phase)
+    phase = np.zeros(n_points, dtype=int)
+    for i, ti in enumerate(t):
+        if ti < cfg.vertical_time:
+            phase[i] = 0  # Vertical
+        elif ti < cfg.vertical_time + cfg.pitch_time:
+            phase[i] = 1  # Pitch
+        elif ti < cfg.burn_time:
+            phase[i] = 2  # Gravity Turn
+        else:
+            phase[i] = 3  # Ballistic
+    
+    # ================================================================
+    # 6. DataFrame 구성
+    # ================================================================
+    data = {
+        'time': t,
+        'x': x, 'y': y, 'altitude': altitude,
+        'u': u, 'v': v, 'w': w, 'V': V,
+        'a_u': a_u, 'a_v': a_v, 'a_w': a_w,
+        'a_x': a_x, 'a_y': a_y, 'a_z': a_z, 'a_total': a_total,
+        'phi': phi, 'theta': theta, 'psi': psi,
+        'p': p, 'q': q, 'r': r,
+        'alpha': alpha, 'beta': beta,
+        'mach': mach, 'q_dyn': q_dyn,
+        'E_s': E_s,
+        'flag_burnout': flag_burnout,
+        'flag_apogee': flag_apogee,
+        'phase': phase,
+        'missile_type': missile_type,
+        'elevation_deg': elevation_deg,
+    }
+    
+    if include_reference:
+        mass = np.zeros(n_points)
+        thrust = np.zeros(n_points)
+        for i, ti in enumerate(t):
+            if ti < cfg.burn_time:
+                fuel_remaining = 1.0 - ti / cfg.burn_time
+                mass[i] = cfg.mass_dry + cfg.mass_propellant * fuel_remaining
+                rho, P, T, a = get_atmosphere(altitude[i])
+                p_ratio = P / P_SL
+                isp = cfg.isp_sea + (cfg.isp_vac - cfg.isp_sea) * (1 - p_ratio)
+                mdot = cfg.mass_propellant / cfg.burn_time
+                thrust[i] = isp * mdot * G0
+            else:
+                mass[i] = cfg.mass_dry
+        data['_ref_mass'] = mass
+        data['_ref_thrust'] = thrust
+    
+    return pd.DataFrame(data)
+
+
+def save_signature_data(df: pd.DataFrame, output_dir: str,
+                        file_format: str = 'both') -> Tuple[str, str]:
+    """
+    시그니처 데이터를 파일로 저장
+    
+    Args:
+        df: 시그니처 DataFrame
+        output_dir: 출력 디렉토리
+        file_format: 'csv', 'npz', 'both'
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    missile_type = df['missile_type'].iloc[0]
+    elevation = int(df['elevation_deg'].iloc[0])
+    base_name = f"{missile_type}_{elevation}deg_dataset"
+    
+    csv_path = None
+    npz_path = None
+    
+    if file_format in ['csv', 'both']:
+        csv_path = output_path / f"{base_name}.csv"
+        df.to_csv(csv_path, index=False)
+    
+    if file_format in ['npz', 'both']:
+        npz_path = output_path / f"{base_name}.npz"
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        arrays = {col: df[col].values for col in numeric_cols}
+        arrays['missile_type'] = np.array([missile_type])
+        arrays['elevation_deg'] = np.array([elevation])
+        np.savez_compressed(npz_path, **arrays)
+    
+    return str(csv_path) if csv_path else None, str(npz_path) if npz_path else None
+
+
+def run_batch_simulation(missile_type: str,
+                         elevation_start: float = 15,
+                         elevation_end: float = 80,
+                         elevation_step: float = 5,
+                         output_dir: str = None,
+                         file_format: str = 'npz',
+                         verbose: bool = True) -> List[pd.DataFrame]:
+    """
+    배치 시뮬레이션 수행
+    
+    Args:
+        missile_type: 미사일 기종명
+        elevation_start: 시작 발사각 [deg]
+        elevation_end: 종료 발사각 [deg]
+        elevation_step: 발사각 간격 [deg]
+        output_dir: 출력 디렉토리
+        file_format: 저장 형식 ('csv', 'npz', 'both', 'none')
+        verbose: 상세 출력 여부
+    """
+    if missile_type not in MISSILES:
+        raise ValueError(f"Unknown missile type: {missile_type}")
+    
+    if output_dir is None:
+        output_dir = Path(__file__).parent / "signature_datasets" / missile_type
+    else:
+        output_dir = Path(output_dir) / missile_type
+    
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"배치 시뮬레이션: {missile_type}")
+        print(f"발사각: {elevation_start}° ~ {elevation_end}° (간격: {elevation_step}°)")
+        print(f"{'='*60}")
+    
+    elevations = np.arange(elevation_start, elevation_end + elevation_step, elevation_step)
+    results = []
+    
+    for i, elev in enumerate(elevations):
+        if verbose:
+            print(f"\n[{i+1}/{len(elevations)}] 발사각: {elev}°")
+        
+        try:
+            sim = True6DOFSimulator(missile_type)
+            sim_result = sim.simulate(elevation_deg=elev)
+            
+            df = extract_results(sim_result, missile_type, elev)
+            
+            if file_format != 'none':
+                save_signature_data(df, str(output_dir), file_format)
+            
+            results.append(df)
+            
+        except Exception as e:
+            print(f"  ✗ 오류: {e}")
+            continue
+    
+    if verbose:
+        print(f"\n배치 시뮬레이션 완료: {len(results)}/{len(elevations)} 성공")
+    
+    return results
 
 
 # ============================================================================
