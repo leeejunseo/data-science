@@ -14,8 +14,8 @@ import matplotlib.pyplot as plt
 import datetime
 from scipy.integrate import solve_ivp
 
-# missile_6dof 사용
-from missile_6dof import Missile6DOF_Professor
+# missile_6dof_true 사용 (Quaternion 기반 True 6DOF)
+from missile_6dof_true import True6DOFSimulator
 
 # NPZ I/O 모듈
 try:
@@ -33,7 +33,8 @@ plt.rcParams['axes.unicode_minus'] = False
 class MissileVisualization6DOF:
     """
     6DOF 미사일 시각화 클래스
-    - 시뮬레이션 실행 (radar_6dof_simulator.py의 Radar6DOFSimulator 사용)
+    - 시뮬레이션 실행 (missile_6dof_true.py의 True6DOFSimulator 사용)
+    - Quaternion 기반 정통 6DOF 시뮬레이터
     - NPZ 저장/로드
     - 12-subplot 그래프 생성
     """
@@ -45,12 +46,12 @@ class MissileVisualization6DOF:
         self.npz_path = None
         self.sol = None
         
-        # missile_6dof 객체 생성
-        self.sim = Missile6DOF_Professor(missile_type=missile_type)
+        # True6DOFSimulator 객체 생성
+        self.sim = True6DOFSimulator(missile_type=missile_type)
     
     def run_simulation(self, launch_angle_deg=45, azimuth_deg=90, sim_time=600):
         """
-        6DOF 시뮬레이션 실행 (Missile6DOF_Professor 사용)
+        6DOF 시뮬레이션 실행 (True6DOFSimulator 사용)
         
         Parameters:
         -----------
@@ -72,11 +73,11 @@ class MissileVisualization6DOF:
         print("=" * 60)
         
         try:
-            # Missile6DOF_Professor의 simulate() 메소드 호출
+            # True6DOFSimulator의 simulate() 메소드 호출
             sim_results = self.sim.simulate(elevation_deg=launch_angle_deg, azimuth_deg=azimuth_deg)
             
             # 결과를 main_visualization 형식으로 변환
-            self._convert_results_from_professor(sim_results)
+            self._convert_results_from_true6dof(sim_results)
             
             # 요약 정보
             final_time = self.results['time'][-1]
@@ -99,37 +100,68 @@ class MissileVisualization6DOF:
             traceback.print_exc()
             return False
     
-    def _convert_results_from_professor(self, sim_results):
+    def _convert_results_from_true6dof(self, sim_results):
         """
-        Missile6DOF_Professor 결과를 main_visualization 형식으로 변환
+        True6DOFSimulator 결과를 main_visualization 형식으로 변환
         
         Parameters:
         -----------
         sim_results : dict
-            시뮬레이션 결과 (Missile6DOF_Professor.simulate() 반환값)
+            시뮬레이션 결과 (True6DOFSimulator.simulate() 반환값)
         """
         t = sim_results['time']
+        
+        # True6DOF는 Body Frame 속도 (u, v, w)를 제공
+        u = sim_results['u']
+        v = sim_results['v']
+        w = sim_results['w']
         V = sim_results['V']
-        gamma = sim_results['gamma']
-        psi = sim_results['psi']
-        x = sim_results['position_x']
-        y = sim_results['position_y']
-        h = sim_results['altitude']
+        
+        # 위치
+        x = sim_results['x']
+        y = sim_results['y']
+        h = sim_results['z']  # True6DOF는 altitude를 'z'로 반환
+        
+        # Euler 각도
         phi = sim_results['phi']
         theta = sim_results['theta']
+        psi = sim_results['psi']
+        
+        # 각속도
         p = sim_results['p']
         q = sim_results['q']
         r = sim_results['r']
-        mass = sim_results['mass']
-        mach = sim_results['mach']
         
-        # 받음각 계산
-        # CRITICAL: missile_6dof에서 이미 계산했으면 그대로 사용!
-        if 'alpha' in sim_results:
-            alpha = sim_results['alpha']  # missile_6dof에서 계산된 값 사용
+        # gamma, mach 계산 (True6DOF는 제공 안 함)
+        # gamma = arcsin(w / V)
+        gamma = np.arcsin(np.clip(w / np.maximum(V, 0.1), -1, 1))
+        
+        # mach 계산 (간단한 ISA 모델)
+        T = 288.15 - 0.0065 * h
+        T[h > 11000] = 216.65
+        a = np.sqrt(1.4 * 287.05 * T)
+        mach = V / a
+        
+        # mass는 없을 수 있으므로 추정
+        if 'mass' in sim_results:
+            mass = sim_results['mass']
         else:
-            alpha = theta - gamma  # fallback (근사)
-        beta = np.zeros_like(t)  # 단순화
+            # 초기 질량에서 선형 감소 추정
+            initial_mass = self.sim.cfg.mass_total
+            mass_dry = self.sim.cfg.mass_dry
+            burn_time = self.sim.cfg.burn_time
+            mass = np.zeros_like(t)
+            for i, ti in enumerate(t):
+                if ti < burn_time:
+                    mass[i] = initial_mass - (initial_mass - mass_dry) * ti / burn_time
+                else:
+                    mass[i] = mass_dry
+        
+        # 받음각 계산 (Body Frame에서 직접 계산)
+        # alpha = arctan2(w, u)
+        alpha = np.arctan2(w, np.maximum(np.abs(u), 0.1))
+        # beta = arcsin(v / V)
+        beta = np.arcsin(np.clip(v / np.maximum(V, 0.1), -1, 1))
         
         # CRITICAL: Theta wrapping (-180° ~ 180°)
         # gamma는 계속 감소하므로 theta도 누적됨 (예: 45° → 233°)
@@ -469,7 +501,7 @@ class MissileVisualization6DOF:
 def main():
     """메인 함수"""
     print("\n" + "=" * 60)
-    print("6DOF 미사일 시각화 시스템 (교수님 구조 기반)")
+    print("6DOF 미사일 시각화 시스템 (True6DOF Quaternion 기반)")
     print("=" * 60 + "\n")
     
     # 미사일 선택

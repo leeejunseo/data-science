@@ -10,10 +10,10 @@ from pathlib import Path
 def save_trajectory(
     filepath: str,
     time: np.ndarray,
-    # Inertial Frame 위치
+    # Inertial Frame 위치 (NED)
     position_x: np.ndarray,  # North (m)
     position_y: np.ndarray,  # East (m)
-    position_z: np.ndarray,  # Altitude (m)
+    position_z: np.ndarray,  # Altitude (m) or Down (-m) depending on convention
     # Body Frame 속도
     u: np.ndarray,
     v: np.ndarray,
@@ -38,7 +38,7 @@ def save_trajectory(
     **kwargs
 ):
     """
-    표준 NPZ 포맷으로 궤적 데이터 저장
+    표준 NPZ 포맷으로 궤적 데이터 저장 (True6DOF 호환)
     
     Parameters:
     -----------
@@ -47,23 +47,30 @@ def save_trajectory(
     time : array
         시간 배열 (s)
     position_x, y, z : array
-        Inertial Frame 위치 (m)
+        Inertial Frame 위치 (NED: North, East, Altitude) (m)
     u, v, w : array
-        Body Frame 속도 (m/s)
+        Body Frame 속도 (Forward, Right, Down) (m/s)
     phi, theta, psi : array
-        Euler 각도 (rad)
+        Euler 각도 (Roll, Pitch, Yaw) (rad)
     p, q, r : array
-        각속도 (rad/s)
+        Body Frame 각속도 (rad/s)
     mass : array
         질량 (kg)
     V, gamma, chi : array, optional
-        Trajectory Frame 속도 성분
+        Trajectory Frame 속도 성분 (자동 계산 가능)
     missile_type : str
-        미사일 종류
+        미사일 종류 ("SCUD-B", "Nodong", "KN-23")
     launch_angle : float
         발사각 (deg)
     **kwargs : dict
         추가 메타데이터
+        
+    Notes:
+    ------
+    True6DOF (missile_6dof_true.py)는 다음 형식으로 데이터를 반환:
+    - 위치: (x, y, z) where z = altitude (not down!)
+    - 속도: (u, v, w) in Body Frame
+    - 자세: Quaternion → Euler (phi, theta, psi) 변환됨
     """
     
     # 데이터 무결성 검증
@@ -138,12 +145,20 @@ def save_trajectory(
 
 def load_trajectory(filepath: str) -> dict:
     """
-    NPZ 파일에서 궤적 데이터 로드
+    NPZ 파일에서 궤적 데이터 로드 (True6DOF 호환)
     
     Returns:
     --------
     data : dict
         모든 배열 및 메타데이터를 포함하는 딕셔너리
+        
+    Notes:
+    ------
+    로드된 데이터는 표준 6DOF 형식:
+    - position_x, y, z: Inertial Frame 위치
+    - u, v, w: Body Frame 속도
+    - phi, theta, psi: Euler 각도
+    - p, q, r: 각속도
     """
     if not Path(filepath).exists():
         raise FileNotFoundError(f"파일을 찾을 수 없음: {filepath}")
@@ -171,7 +186,13 @@ def load_trajectory(filepath: str) -> dict:
 
 def validate_trajectory(data: dict) -> bool:
     """
-    로드된 데이터의 물리적 정합성 검증
+    로드된 데이터의 물리적 정합성 검증 (True6DOF)
+    
+    검증 항목:
+    1. 속도 크기 일치 (Body vs Trajectory)
+    2. 각도 범위 검증
+    3. 고도 음수 체크
+    4. 시간 간격 균일성
     
     Returns:
     --------

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 6DOF 미사일 시그니처 데이터 생성기
-- final/missile_6dof.py 기반 6DOF 시뮬레이션
+- final/missile_6dof_true.py 기반 True 6DOF 시뮬레이션 (Quaternion)
 - 탄종별 고유 시그니처 특성 추출
 - 분류 모델 학습용 데이터셋 생성
 
@@ -27,9 +27,9 @@ warnings.filterwarnings('ignore')
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from missile_6dof import Missile6DOF_Professor
-    import config as cfg
-    print("✓ missile_6dof, config 모듈 로드 성공")
+    from missile_6dof_true import True6DOFSimulator
+    import config_6dof as cfg
+    print("✓ missile_6dof_true, config_6dof 모듈 로드 성공")
 except ImportError as e:
     print(f"✗ 모듈 로드 실패: {e}")
     sys.exit(1)
@@ -37,10 +37,10 @@ except ImportError as e:
 
 class MissileSignatureGenerator:
     """
-    6DOF 기반 미사일 시그니처 데이터 생성기
+    True 6DOF 기반 미사일 시그니처 데이터 생성기 (Quaternion)
     
     탄종 분류를 위한 핵심 시그니처:
-    1. 기하학적 특성: 궤적 형상, 최대고도/사거리 비율
+    1. 기하학적 특성: 권적 형상, 최대고도/사거리 비율
     2. 동역학적 특성: 받음각, 각속도, 위상 평면
     3. 추진 특성: 가속도 프로파일, 연소 종료 시점
     4. 공력 특성: 양항비, 항력 프로파일
@@ -173,8 +173,8 @@ class MissileSignatureGenerator:
                     actual_angle = np.clip(actual_angle, 20, 75)
                     
                     try:
-                        # 6DOF 시뮬레이션 실행
-                        sim = Missile6DOF_Professor(missile_type=missile_type)
+                        # True 6DOF 시뮬레이션 실행
+                        sim = True6DOFSimulator(missile_type=missile_type)
                         results = sim.simulate(
                             elevation_deg=actual_angle,
                             azimuth_deg=90
@@ -252,26 +252,59 @@ class MissileSignatureGenerator:
         """
         try:
             t = results['time']
+            
+            # True6DOF 결과 키 이름 변환
+            # True6DOF는 Body Frame (u,v,w)를 반환
+            u = results['u']
+            v = results['v']
+            w = results['w']
             V = results['V']
-            gamma = results['gamma']
-            x = results['position_x']
-            y = results['position_y']
-            h = results['altitude']
-            alpha = results['alpha']
-            theta = results['theta']
+            
+            x = results['x']
+            y = results['y']
+            h = results['z']  # altitude는 'z'로 반환
+            
             phi = results['phi']
+            theta = results['theta']
+            psi = results['psi']
+            
             p = results['p']
             q = results['q']
             r = results['r']
-            mass = results['mass']
-            mach = results['mach']
+            
+            # alpha, gamma, mach 계산 (True6DOF는 제공 안 함)
+            alpha = np.arctan2(w, np.maximum(np.abs(u), 0.1))
+            gamma = np.arcsin(np.clip(w / np.maximum(V, 0.1), -1, 1))
+            
+            # mach 계산
+            T = 288.15 - 0.0065 * h
+            T[h > 11000] = 216.65
+            a = np.sqrt(1.4 * 287.05 * T)
+            mach = V / a
+            
+            # mass 추정 (없을 경우)
+            if 'mass' not in results:
+                missile_info = cfg.MISSILE_TYPES.get(missile_type, {})
+                initial_mass = missile_info.get('launch_weight', 5860)
+                propellant_mass = missile_info.get('propellant_mass', 4875)
+                burn_time = missile_info.get('burn_time', 65)
+                dry_mass = initial_mass - propellant_mass
+                
+                mass = np.zeros_like(t)
+                for i, ti in enumerate(t):
+                    if ti < burn_time:
+                        mass[i] = initial_mass - propellant_mass * ti / burn_time
+                    else:
+                        mass[i] = dry_mass
+            else:
+                mass = results['mass']
             
             # 데이터 검증
             if len(t) < 50 or np.any(np.isnan(V)) or np.any(np.isinf(h)):
                 return None
             
             # 미사일 정보
-            missile_info = cfg.ENHANCED_MISSILE_TYPES.get(missile_type, {})
+            missile_info = cfg.MISSILE_TYPES.get(missile_type, {})
             burn_time = missile_info.get('burn_time', 65)
             initial_mass = missile_info.get('launch_weight', 5860)
             
@@ -406,16 +439,33 @@ class MissileSignatureGenerator:
         else:
             indices = np.arange(n)
         
+        # True6DOF 결과 키 변환
+        u = results['u']
+        v = results['v']
+        w = results['w']
+        V = results['V']
+        
+        # alpha, gamma 계산
+        alpha = np.arctan2(w, np.maximum(np.abs(u), 0.1))
+        gamma = np.arcsin(np.clip(w / np.maximum(V, 0.1), -1, 1))
+        
+        # mach 계산
+        h_full = results['z']
+        T = 288.15 - 0.0065 * h_full
+        T[h_full > 11000] = 216.65
+        a = np.sqrt(1.4 * 287.05 * T)
+        mach = V / a
+        
         return {
             'time': t[indices].astype(np.float32),
-            'V': results['V'][indices].astype(np.float32),
-            'h': results['altitude'][indices].astype(np.float32),
-            'x': results['position_x'][indices].astype(np.float32),
-            'y': results['position_y'][indices].astype(np.float32),
-            'alpha': results['alpha'][indices].astype(np.float32),
+            'V': V[indices].astype(np.float32),
+            'h': results['z'][indices].astype(np.float32),
+            'x': results['x'][indices].astype(np.float32),
+            'y': results['y'][indices].astype(np.float32),
+            'alpha': alpha[indices].astype(np.float32),
             'q': results['q'][indices].astype(np.float32),
-            'gamma': results['gamma'][indices].astype(np.float32),
-            'mach': results['mach'][indices].astype(np.float32)
+            'gamma': gamma[indices].astype(np.float32),
+            'mach': mach[indices].astype(np.float32)
         }
     
     def _save_dataset(
