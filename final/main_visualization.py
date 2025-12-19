@@ -14,8 +14,8 @@ import matplotlib.pyplot as plt
 import datetime
 from scipy.integrate import solve_ivp
 
-# missile_6dof 사용
-from missile_6dof import Missile6DOF_Professor
+# missile_6dof_v2 사용
+from missile_6dof_FINAL_CORRECTED import Missile6DOF_Authentic
 
 # NPZ I/O 모듈
 try:
@@ -45,8 +45,8 @@ class MissileVisualization6DOF:
         self.npz_path = None
         self.sol = None
         
-        # missile_6dof 객체 생성
-        self.sim = Missile6DOF_Professor(missile_type=missile_type)
+        # missile_6dof_v2 객체 생성
+        self.sim = Missile6DOF_Authentic(missile_type=missile_type)
     
     def run_simulation(self, launch_angle_deg=45, azimuth_deg=90, sim_time=600):
         """
@@ -101,41 +101,63 @@ class MissileVisualization6DOF:
     
     def _convert_results_from_professor(self, sim_results):
         """
-        Missile6DOF_Professor 결과를 main_visualization 형식으로 변환
+        Missile6DOF_Authentic 결과를 main_visualization 형식으로 변환
         
         Parameters:
         -----------
         sim_results : dict
-            시뮬레이션 결과 (Missile6DOF_Professor.simulate() 반환값)
+            시뮬레이션 결과 (Missile6DOF_Authentic.simulate() 반환값)
+            v2 구조: position_x/y/z, u/v/w, phi/theta/psi, p/q/r, alpha, mach, mass
         """
         t = sim_results['time']
-        V = sim_results['V']
-        gamma = sim_results['gamma']
-        psi = sim_results['psi']
+        
+        # Body Frame 기반 (v2)
         x = sim_results['position_x']
         y = sim_results['position_y']
-        h = sim_results['altitude']
+        h = sim_results['position_z']  # Z = altitude
+        u = sim_results['u']
+        v = sim_results['v']
+        w = sim_results['w']
+        V = sim_results['V']
         phi = sim_results['phi']
         theta = sim_results['theta']
+        psi = sim_results['psi']
         p = sim_results['p']
         q = sim_results['q']
         r = sim_results['r']
-        mass = sim_results['mass']
+        alpha = sim_results['alpha']
         mach = sim_results['mach']
+        mass = sim_results['mass']
         
-        # 받음각 계산
-        # CRITICAL: missile_6dof에서 이미 계산했으면 그대로 사용!
-        if 'alpha' in sim_results:
-            alpha = sim_results['alpha']  # missile_6dof에서 계산된 값 사용
-        else:
-            alpha = theta - gamma  # fallback (근사)
-        beta = np.zeros_like(t)  # 단순화
+        # Trajectory Frame 계산 (Body → Inertial → Trajectory)
+        # gamma (비행경로각): Inertial Frame 수직 속도에서 계산
+        gamma = np.zeros_like(t)
+        for i in range(len(t)):
+            # Body → Inertial 변환
+            cphi, sphi = np.cos(phi[i]), np.sin(phi[i])
+            ctheta, stheta = np.cos(theta[i]), np.sin(theta[i])
+            cpsi, spsi = np.cos(psi[i]), np.sin(psi[i])
+            
+            T_BI = np.array([
+                [ctheta*cpsi, ctheta*spsi, -stheta],
+                [sphi*stheta*cpsi - cphi*spsi, sphi*stheta*spsi + cphi*cpsi, sphi*ctheta],
+                [cphi*stheta*cpsi + sphi*spsi, cphi*stheta*spsi - sphi*cpsi, cphi*ctheta]
+            ])
+            
+            v_body = np.array([u[i], v[i], w[i]])
+            v_inertial = T_BI @ v_body
+            
+            # gamma = arcsin(v_up / V)
+            if V[i] > 0.1:
+                gamma[i] = np.arcsin(np.clip(v_inertial[2] / V[i], -1, 1))
+            else:
+                gamma[i] = 0
         
-        # CRITICAL: Theta wrapping (-180° ~ 180°)
-        # gamma는 계속 감소하므로 theta도 누적됨 (예: 45° → 233°)
-        # 시각화를 위해 -π ~ π 범위로 wrap
+        # beta (측면각) - 단순화
+        beta = np.zeros_like(t)
+        
+        # Theta wrapping
         def wrap_angle(angle):
-            """각도를 -π ~ π 범위로 wrap"""
             while angle > np.pi:
                 angle -= 2 * np.pi
             while angle < -np.pi:
@@ -144,7 +166,7 @@ class MissileVisualization6DOF:
         
         theta_wrapped = np.array([wrap_angle(th) for th in theta])
         
-        # 연료 (초기 질량 - 현재 질량)
+        # 연료
         fuel = mass[0] - mass
         
         # results 딕셔너리 생성
@@ -157,8 +179,8 @@ class MissileVisualization6DOF:
             'gamma': gamma,
             'psi': psi,
             'phi': phi,
-            'theta': theta_wrapped,  # ✅ Wrapped!
-            'psi_euler': psi,  # 오일러 요각 (같은 값 사용)
+            'theta': theta_wrapped,
+            'psi_euler': psi,
             'p': p,
             'q': q,
             'r': r,
@@ -189,15 +211,42 @@ class MissileVisualization6DOF:
             print("⚠ 먼저 시뮬레이션을 실행하세요.")
             return None
         
-        if save_trajectory is None:
-            print("⚠ trajectory_io 모듈이 없어 NPZ 저장 불가")
-            return None
-        
         # 파일 경로 자동 생성
         if filepath is None:
             os.makedirs('results_6dof', exist_ok=True)
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             filepath = f"results_6dof/{self.missile_type}_{launch_angle_deg}deg_{timestamp}.npz"
+        
+        # missile_6dof_v2의 save_to_standard_npz 사용 (있으면)
+        if hasattr(self.sim, 'save_to_standard_npz'):
+            # v2에서 직접 저장 (원본 데이터 사용)
+            raw_results = {
+                'time': self.results['time'],
+                'position_x': self.results['x'],
+                'position_y': self.results['y'],
+                'position_z': self.results['h'],
+                'u': self.results.get('u', np.zeros_like(self.results['time'])),
+                'v': self.results.get('v', np.zeros_like(self.results['time'])),
+                'w': self.results.get('w', np.zeros_like(self.results['time'])),
+                'V': self.results['velocity'],
+                'phi': self.results['phi'],
+                'theta': self.results['theta'],
+                'psi': self.results['psi'],
+                'p': self.results['p'],
+                'q': self.results['q'],
+                'r': self.results['r'],
+                'alpha': self.results['alpha'],
+                'mach': self.results['mach'],
+                'mass': self.results['mass']
+            }
+            self.sim.save_to_standard_npz(raw_results, filepath, launch_angle_deg)
+            self.npz_path = filepath
+            return filepath
+        
+        # trajectory_io 사용 (fallback)
+        if save_trajectory is None:
+            print("⚠ trajectory_io 모듈이 없어 NPZ 저장 불가")
+            return None
         
         # Trajectory Frame에서 Body Frame으로 역변환 (근사)
         # V, gamma, psi -> u, v, w 변환

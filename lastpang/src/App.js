@@ -112,11 +112,39 @@ const KoreaMissileUI = () => {
     let Vy = V0 * Math.cos(elevation) * Math.cos(azimuthRad);
     let Vz = V0 * Math.sin(elevation);
 
+    // missile_6dof_v2.py 기반 파라미터 (업데이트됨)
     const params = {
-      'SCUD-B': { mass: 3422.5, thrust: 2026728, burnTime: 65, CD: 0.25, S: 0.608 },
-      'KN-23': { mass: 1750, thrust: 2176275, burnTime: 40, CD: 0.28, S: 0.709 },
-      'Nodong': { mass: 8000, thrust: 5544480, burnTime: 70, CD: 0.35, S: 1.452 }
+      'SCUD-B': { 
+        mass: 5860,           // launch_weight
+        propellant: 4875,     // propellant_mass
+        diameter: 0.88,
+        burnTime: 65, 
+        isp: 230 * 0.97,      // ISP with Fleeman correction
+        CD: 0.25, 
+        S: Math.PI * (0.88/2)**2  // reference area
+      },
+      'KN-23': { 
+        mass: 3415,           // launch_weight
+        propellant: 2915,     // propellant_mass
+        diameter: 0.95,
+        burnTime: 40, 
+        isp: 260 * 0.97,      // ISP with Fleeman correction
+        CD: 0.28, 
+        S: Math.PI * (0.95/2)**2
+      },
+      'Nodong': { 
+        mass: 16500,          // launch_weight
+        propellant: 15300,    // propellant_mass
+        diameter: 1.36,
+        burnTime: 70, 
+        isp: 255 * 0.97,      // ISP with Fleeman correction
+        CD: 0.35, 
+        S: Math.PI * (1.36/2)**2
+      }
     }[missileType];
+    
+    // 추력 계산 (F = Isp * mdot * g)
+    const thrust = params.isp * (params.propellant / params.burnTime) * g;
 
     const results = {
       time: [], x: [], y: [], h: [], velocity: [], gamma: [], psi: [], alpha: [], mach: []
@@ -140,9 +168,9 @@ const KoreaMissileUI = () => {
       
       let Ax, Ay, Az;
       if (t < params.burnTime) {
-        const thrustX = params.thrust * Math.cos(elevation) * Math.sin(azimuthRad) / params.mass;
-        const thrustY = params.thrust * Math.cos(elevation) * Math.cos(azimuthRad) / params.mass;
-        const thrustZ = params.thrust * Math.sin(elevation) / params.mass;
+        const thrustX = thrust * Math.cos(elevation) * Math.sin(azimuthRad) / params.mass;
+        const thrustY = thrust * Math.cos(elevation) * Math.cos(azimuthRad) / params.mass;
+        const thrustZ = thrust * Math.sin(elevation) / params.mass;
         
         Ax = thrustX - (D * Vx / V) / params.mass;
         Ay = thrustY - (D * Vy / V) / params.mass;
