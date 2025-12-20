@@ -265,21 +265,22 @@ MISSILES = {
     ),
     "KN-23": MissileConfig(
         name="KN-23",
-        mass_total=3400,          # kg
-        mass_propellant=2400,     # kg (고체 추진제)
-        mass_dry=1000,            # kg
+        mass_total=3415,          # kg (문헌 기반)
+        mass_propellant=2500,     # kg (고체 추진제)
+        mass_dry=915,             # kg
         diameter=0.95,
         length=7.5,
         reference_area=np.pi * (0.95/2)**2,
-        isp_sea=250,              # s (고체)
-        isp_vac=265,              # s
-        burn_time=35,             # s (고체는 더 짧음)
-        vertical_time=1,          # KN-23: 초단기 수직 비행 (편평 탄도 강화)
-        pitch_time=4,             # KN-23: 더 빠른 피치오버
-        pitch_angle=25 * np.pi/180,
-        C_m_alpha=-2.0,           # KN-23: 상향 조정 (저고도 고속 안정성)
-        C_mq=-100.0,
-        C_lp=-28.0,
+        isp_sea=260,              # s (고체) - 향상된 Isp
+        isp_vac=275,              # s
+        burn_time=50,             # s (연장된 연소시간으로 사거리 확보)
+        vertical_time=3,          # KN-23: 짧은 수직 비행
+        pitch_time=12,            # KN-23: 피치오버 시간
+        pitch_angle=15 * np.pi/180,  # KN-23: 낮은 피치각 (편평 탄도)
+        C_m_alpha=-3.0,           # KN-23: 정적 안정성
+        C_mq=-150.0,              # KN-23: 피치 댐핑
+        C_lp=-25.0,
+        CL_alpha=4.0,             # KN-23: 높은 양력 기울기 (기동성)
     ),
 }
 
@@ -405,15 +406,19 @@ class True6DOFSimulator:
         Determine current flight phase
         
         KN-23 특수 단계:
-        - Pull-up: 하강 중 40~30km 구간에서 활공 기동
+        - Pull-up: 하강 중 25~45km 구간
+        - Terminal: 최종 돌입
         """
-        # KN-23 Pull-up 단계 확인 (편평 탄도: 정점 50km 내외)
+        # KN-23 Pull-up/Terminal 단계 확인
         if self.missile_type == "KN-23" and altitude is not None:
             is_descending = getattr(self, '_is_descending', False)
-            # 편평 탄도: 20~45km에서 Pull-up 구간
-            if is_descending and 20000 <= altitude <= 45000:
+            
+            if is_descending and 25000 <= altitude <= 45000:
                 return "Pull-up"
+            if is_descending and altitude < 25000:
+                return "Terminal"
         
+        # 공통 비행 단계
         if t < self.cfg.vertical_time:
             return "Vertical"
         elif t < self.cfg.vertical_time + self.cfg.pitch_time:
@@ -544,105 +549,127 @@ class True6DOFSimulator:
                              altitude: float, gamma: float, phase: str,
                              m: float, I_yy: float, ALPHA_MAX: float) -> float:
         """
-        KN-23 전용 제어 모멘트 계산
+        KN-23 전용 제어 모멘트 계산 (Quasi-Ballistic Trajectory)
         
         특징:
-        1. 편평 탄도: 빠른 피치오버, 낮은 정점 고도 (50~60km)
-        2. 전 구간 RCS 자세 제어: 추력 유무와 무관하게 받음각 제한
-        3. Pull-up 시그니처: 하강 중 40~30km에서 활공 기동
+        1. 편평 탄도: 빠른 피치오버 → 40-60km 고도 유지
+        2. 받음각 15° 이하 엄격 제한
+        3. Pull-up 기동: 종말 단계에서 양력 활용
+        4. 전 구간 RCS 자세 제어
         """
         target_elevation = getattr(self, 'target_elevation', np.pi/4)
         
         # ================================================================
+        # 받음각 제한: 15° (0.2618 rad) - 구조적 한계
+        # ================================================================
+        ALPHA_LIMIT = 15.0 * np.pi / 180  # 15도 제한
+        
+        # ================================================================
         # 1. 기본 제어: 속도 벡터 추종 (alpha → 0)
         # ================================================================
-        K_alpha = 6.0  # KN-23: 강화된 받음각 추종 게인
+        K_alpha = 8.0  # KN-23: 강화된 받음각 추종 게인
         q_cmd_alpha = -K_alpha * alpha
         
-        # 받음각 10° 제한 강화
-        if abs(alpha) > ALPHA_MAX:
-            q_cmd_alpha = -10.0 * np.sign(alpha) * (abs(alpha) - ALPHA_MAX * 0.3)
+        # 받음각 15° 제한 - 강력한 복원력
+        if abs(alpha) > ALPHA_LIMIT * 0.5:  # 7.5도 이상부터 강한 복원
+            overshoot = abs(alpha) - ALPHA_LIMIT * 0.5
+            q_cmd_alpha = -15.0 * np.sign(alpha) * overshoot
         
         # ================================================================
-        # 2. 비행 단계별 제어 (받음각 제한과 병행)
+        # 2. KN-23 Quasi-Ballistic 비행 단계별 제어
         # ================================================================
         if phase == "Vertical":
             q_cmd = 0.0
             
         elif phase == "Pitch":
-            # KN-23: 편평 탄도를 위한 피치오버
-            # 정점 고도 50km 내외를 위해 발사각보다 낮은 피치각으로 유도
-            # 발사각 - 25°로 피치다운 (최소 5°)
-            depressed_target = target_elevation - 25 * np.pi / 180
-            depressed_target = max(depressed_target, 5 * np.pi / 180)  # 최소 5°
-            pitch_range = np.pi/2 - depressed_target
-            q_cmd_pitch = -pitch_range / self.cfg.pitch_time * 2.5
+            # KN-23: 빠른 피치오버 (15도 목표)
+            target_pitch = 15 * np.pi / 180
+            pitch_range = np.pi/2 - target_pitch
             
-            # 피치 명령과 받음각 제한 병행 (받음각 우선)
-            if abs(alpha) > ALPHA_MAX * 0.6:
-                q_cmd = q_cmd_alpha  # 받음각 제한 우선
-            else:
-                q_cmd = q_cmd_pitch
+            # 강화된 피치오버 명령
+            q_cmd = -pitch_range / self.cfg.pitch_time * 2.0
         
         elif phase == "Gravity Turn":
-            # KN-23: Gravity Turn에서 속도 벡터 추종 (받음각 제한 우선)
-            q_cmd = q_cmd_alpha
+            # KN-23: 15도 피치각 유지
+            target_pitch = 15 * np.pi / 180
+            theta_error = target_pitch - theta
+            
+            K_theta = 3.0
+            q_cmd = K_theta * theta_error + q_cmd_alpha * 0.5
         
         elif phase == "Ballistic":
-            # 속도 벡터 추종 (받음각 제한)
-            q_cmd = q_cmd_alpha
+            # KN-23: 속도 벡터 추종 + 고도 유지
+            TARGET_ALT = 50000
+            
+            if altitude > 60000:
+                q_cmd = q_cmd_alpha - 0.1
+            elif altitude < 40000 and gamma > -5 * np.pi / 180:
+                q_cmd = q_cmd_alpha + 0.05
+            else:
+                q_cmd = q_cmd_alpha
             
         elif phase == "Pull-up":
             # ================================================================
-            # 3. Pull-up 시그니처: 하강 중 일시적 상향 피치
+            # Pull-up 기동: 종말 단계 양력 활용
+            # 고도 25-45km에서 받음각 증가로 양력 생성
             # ================================================================
-            # 풀업 강도 1.5배 강화 (0.10 -> 0.15)
-            pullup_intensity = 0.15  # Pull-up 강도 강화
+            pullup_alpha_target = 10.0 * np.pi / 180  # 목표 받음각 10도
             
-            # 고도에 따른 가변 강도 (편평 탄도: 더 낮은 고도에서 Pull-up)
-            if altitude > 30000:
-                intensity_scale = (45000 - altitude) / 15000
+            # 고도에 따른 Pull-up 강도
+            if altitude > 35000:
+                intensity = (45000 - altitude) / 10000
             else:
-                intensity_scale = (altitude - 20000) / 10000
-            intensity_scale = np.clip(intensity_scale, 0, 1)
+                intensity = (altitude - 25000) / 10000
+            intensity = np.clip(intensity, 0, 1)
             
-            # Pull-up + 받음각 제한 병행
-            q_cmd_pullup = pullup_intensity * intensity_scale
+            # Pull-up 명령: 받음각을 목표값으로 유도
+            alpha_error = pullup_alpha_target * intensity - alpha
+            q_cmd_pullup = 4.0 * alpha_error
             
-            if abs(alpha) < ALPHA_MAX * 0.7:
-                q_cmd = q_cmd_alpha + q_cmd_pullup
-            else:
+            # 받음각 15도 제한 유지
+            if abs(alpha) > ALPHA_LIMIT * 0.8:
                 q_cmd = q_cmd_alpha
+            else:
+                q_cmd = q_cmd_pullup
+        
+        elif phase == "Terminal":
+            # ================================================================
+            # Terminal 단계: 최종 돌입
+            # 받음각 최소화하여 안정적 돌입
+            # ================================================================
+            q_cmd = q_cmd_alpha  # 속도 벡터 추종
         
         else:
-            # 기타 구간: 받음각 제한
             q_cmd = q_cmd_alpha
         
         # ================================================================
-        # 4. RCS 모멘트 계산 (전 구간 활성)
+        # 3. 각속도 댐핑 (진동 억제)
         # ================================================================
-        # 동압 기반 가변 게인
-        q_dyn_ref = 30000  # KN-23: 더 낮은 기준 동압
+        K_damp = 2.0  # 댐핑 게인
+        q_cmd = q_cmd - K_damp * q_rate
+        
+        # ================================================================
+        # 4. 제어 모멘트 계산
+        # ================================================================
+        q_dyn_ref = 50000
         gain_scale = 1.0 / (1.0 + q_dyn / q_dyn_ref)
         
-        # TVC 구간 (thrust > 100)
         if thrust > 100:
-            omega_n = 5.0 * gain_scale  # KN-23: 더 높은 대역폭
+            # TVC 제어
+            omega_n = 6.0 * gain_scale
             K_rate = I_yy * omega_n
-            M_control = K_rate * (q_cmd - q_rate)
+            M_control = K_rate * q_cmd
             
-            # TVC 권한 제한
             M_max = thrust * self.cfg.tvc_moment_arm * np.sin(self.cfg.tvc_max_angle)
             M_control = np.clip(M_control, -M_max, M_max)
         else:
-            # RCS 구간 (추력 없음): 가상 RCS 제어
-            # KN-23은 기동성 탄두로 강력한 RCS 보유
-            omega_n = 4.0 * gain_scale  # 강화된 RCS 대역폭
+            # RCS 제어 (탄도 비행 중)
+            omega_n = 5.0 * gain_scale
             K_rate = I_yy * omega_n
-            M_control = K_rate * (q_cmd - q_rate)
+            M_control = K_rate * q_cmd
             
-            # RCS 권한 제한 (기동성 탄두: 더 큰 RCS 권한)
-            M_max_rcs = 0.3 * m * 9.81 * self.cfg.length * 0.4  # 강화된 RCS
+            # RCS 권한 (기동성 탄두)
+            M_max_rcs = 0.4 * m * 9.81 * self.cfg.length * 0.4
             M_control = np.clip(M_control, -M_max_rcs, M_max_rcs)
         
         return M_control
@@ -856,48 +883,28 @@ class True6DOFSimulator:
         print(f"  Elevation: {elevation_deg}°, Azimuth: {azimuth_deg}°")
         print(f"{'='*60}")
         
-        # Initial state - START VERTICAL, pitch over to elevation angle
-        # theta = 90° = vertical in NED (body x points up = -z_ned)
-        theta0 = np.pi/2  # Always start vertical
+        # Store target elevation for flight program
+        # KN-23: 편평 탄도를 위해 목표 발사각을 15도로 강제 설정
+        if self.missile_type == "KN-23":
+            self.target_elevation = 15 * np.pi/180  # 15도 목표 (편평 탄도)
+            print(f"  KN-23 Quasi-Ballistic: Target elevation = 15°")
+        else:
+            self.target_elevation = elevation_deg * np.pi/180
         
         # 초기각 점프 해결: azimuth를 정확히 설정
         # NED 좌표계에서 azimuth 90° = East = y축 방향
-        # psi = 0이면 North(x축), psi = 90°이면 East(y축)
         psi0 = (90 - azimuth_deg) * np.pi/180
         
-        # Store target elevation for flight program
-        self.target_elevation = elevation_deg * np.pi/180
+        # ================================================================
+        # 초기 조건 설정
+        # 모든 미사일: 수직 발사 후 피치오버
+        # ================================================================
+        theta0 = np.pi/2  # 90도 수직 발사
+        u0 = 0.1  # 작은 초기 속도
         
-        # 초기 쿼터니언 안정화: 수직 발사 시 직접 쿼터니언 계산
-        # theta = 90° (수직), psi = 0 (북쪽 방향)
-        # 오일러각 변환 대신 직접 쿼터니언 생성으로 점프 방지
-        # 수직 자세: body x축이 위를 향함 (NED z축의 반대)
-        # q = [cos(45°), 0, sin(45°), 0] for pitch 90°
-        c45 = np.cos(np.pi/4)
-        s45 = np.sin(np.pi/4)
-        
-        # Azimuth 회전 적용 (z축 회전)
-        c_psi = np.cos(psi0/2)
-        s_psi = np.sin(psi0/2)
-        
-        # 수직 자세 쿼터니언 (pitch 90°)
-        q_pitch = np.array([c45, 0, s45, 0])
-        
-        # Yaw 회전 쿼터니언
-        q_yaw = np.array([c_psi, 0, 0, s_psi])
-        
-        # 쿼터니언 곱셈: q_yaw * q_pitch
-        quat0 = np.array([
-            q_yaw[0]*q_pitch[0] - q_yaw[3]*q_pitch[2],
-            q_yaw[0]*q_pitch[1] + q_yaw[3]*q_pitch[3],
-            q_yaw[0]*q_pitch[2] + q_yaw[3]*q_pitch[0],
-            q_yaw[0]*q_pitch[3] - q_yaw[3]*q_pitch[1]
-        ])
-        quat0 = quat_normalize(quat0)
-        
-        # Initial body velocity (small forward velocity for stability)
-        # 너무 작으면 수치 불안정, 너무 크면 초기 조건 왜곡
-        u0 = 0.1  # 감소: 초기 점프 완화
+        # 쿼터니언 생성 (Euler to Quaternion)
+        phi0 = 0  # Roll = 0
+        quat0 = quat_from_euler(phi0, theta0, psi0)
         
         state0 = np.array([
             0, 0, 0,                    # Position (NED: z down)
@@ -1313,5 +1320,11 @@ if __name__ == "__main__":
     axes[1,2].set_title('Yaw Rate')
     
     plt.tight_layout()
-    plt.savefig('/home/claude/true_6dof_results.png', dpi=150)
-    print("\n✓ Plot saved: /home/claude/true_6dof_results.png")
+    
+    # Windows 호환 경로
+    output_dir = Path(__file__).parent / "results_6dof"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "true_6dof_results.png"
+    plt.savefig(output_path, dpi=150)
+    print(f"\n✓ Plot saved: {output_path}")
+    plt.show()
