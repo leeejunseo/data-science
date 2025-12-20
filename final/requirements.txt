@@ -1,6 +1,19 @@
+# 6DOF 미사일 시뮬레이션 프로젝트 의존성
+# =========================================
+
+# 핵심 과학 계산
 numpy>=1.21.0
-scipy>=1.7.0
-matplotlib>=3.5.0
-torch>=1.10.0
-scikit-learn>=1.0.0
-pandas>=1.3.0
+scipy>=1.7.0          # solve_ivp, 적분
+
+# 시각화
+matplotlib>=3.5.0     # TkAgg 백엔드 사용
+
+# 데이터 처리
+pandas>=1.3.0         # CSV/DataFrame 처리
+
+# 머신러닝 (선택적 - Neural ODE용)
+torch>=1.10.0         # config.py에서 사용
+scikit-learn>=1.0.0   # 분류 모델용
+
+# 설치 명령어:
+# pip install -r requirements.txt
