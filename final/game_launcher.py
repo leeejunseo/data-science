@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Game Launcher - Missile Identification System
+==============================================
+
+Event-driven architecture:
+1. Random missile selection at startup
+2. Load real .npz data when triggered
+3. Run signature analysis
+4. Display visualization and prediction
+
+Author: Data Science Project
+"""
+
+import numpy as np
+import json
+import random
+import subprocess
+import sys
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.parse
+import os
+
+# Paths
+SCRIPT_DIR = Path(__file__).parent
+RESULTS_DIR = SCRIPT_DIR / "results_6dof"
+SIGNATURE_DIR = SCRIPT_DIR / "signature_datasets"
+
+# Find Python executable (prefer venv)
+def get_python_executable():
+    """Get the correct Python executable (prefer virtual environment)"""
+    # Check for .venv in parent directory
+    venv_python = SCRIPT_DIR.parent / ".venv" / "Scripts" / "python.exe"
+    if venv_python.exists():
+        return str(venv_python)
+    
+    # Check for .venv in current directory
+    venv_python2 = SCRIPT_DIR / ".venv" / "Scripts" / "python.exe"
+    if venv_python2.exists():
+        return str(venv_python2)
+    
+    # Fallback to current Python
+    return sys.executable
+
+PYTHON_EXE = get_python_executable()
+
+# Available NPZ files for each missile type
+NPZ_FILES = {
+    "SCUD-B": list(RESULTS_DIR.glob("SCUD-B_*.npz")),
+    "Nodong": list(RESULTS_DIR.glob("Nodong_*.npz")),
+    "KN-23": list(RESULTS_DIR.glob("KN-23_*.npz")),
+}
+
+# Signature profiles for identification
+SIGNATURE_PROFILES = {
+    "SCUD-B": {
+        "altitude_range": (80, 150),  # km
+        "range_range": (200, 400),    # km
+        "has_pullup": False,
+        "description": "Standard ballistic trajectory, short range"
+    },
+    "Nodong": {
+        "altitude_range": (200, 450),  # km
+        "range_range": (800, 1600),    # km
+        "has_pullup": False,
+        "description": "High parabolic arc, medium-long range"
+    },
+    "KN-23": {
+        "altitude_range": (30, 70),    # km (depressed trajectory!)
+        "range_range": (400, 900),     # km
+        "has_pullup": True,
+        "description": "Quasi-ballistic, low altitude, terminal pull-up maneuver"
+    }
+}
+
+
+class GameState:
+    """Global game state"""
+    hidden_missile: str = None
+    npz_path: str = None
+    trajectory_data: dict = None
+    identification_result: dict = None
+    revealed: bool = False
+
+
+def select_random_missile():
+    """Randomly select a missile type and corresponding NPZ file"""
+    # Filter to only missiles with available NPZ files
+    available = {k: v for k, v in NPZ_FILES.items() if v}
+    
+    if not available:
+        print("⚠ No NPZ files found in results_6dof/")
+        return None, None
+    
+    missile_type = random.choice(list(available.keys()))
+    npz_file = random.choice(available[missile_type])
+    
+    GameState.hidden_missile = missile_type
+    GameState.npz_path = str(npz_file)
+    GameState.revealed = False
+    
+    print(f"\n{'='*60}")
+    print(f"🎯 [HIDDEN] Selected missile: {missile_type}")
+    print(f"   NPZ file: {npz_file.name}")
+    print(f"{'='*60}")
+    
+    return missile_type, str(npz_file)
+
+
+def load_npz_data(npz_path: str) -> dict:
+    """Load trajectory data from NPZ file"""
+    try:
+        data = np.load(npz_path, allow_pickle=True)
+        
+        # Extract key arrays
+        result = {
+            'time': data['time'].tolist() if 'time' in data else [],
+            'x': data['position_x'].tolist() if 'position_x' in data else [],
+            'y': data['position_y'].tolist() if 'position_y' in data else [],
+            'z': data['position_z'].tolist() if 'position_z' in data else [],
+            'V': data['V'].tolist() if 'V' in data else [],
+            'theta': data['theta'].tolist() if 'theta' in data else [],
+            'gamma': data['gamma'].tolist() if 'gamma' in data else [],
+            'alpha': data['alpha'].tolist() if 'alpha' in data else [],
+            'mach': data['mach'].tolist() if 'mach' in data else [],
+        }
+        
+        # Calculate key features
+        if result['z']:
+            result['max_altitude_km'] = max(result['z']) / 1000
+        if result['x'] and result['y']:
+            final_x = result['x'][-1]
+            final_y = result['y'][-1]
+            result['range_km'] = np.sqrt(final_x**2 + final_y**2) / 1000
+        if result['time']:
+            result['flight_time_s'] = result['time'][-1]
+        
+        GameState.trajectory_data = result
+        return result
+        
+    except Exception as e:
+        print(f"⚠ Error loading NPZ: {e}")
+        return None
+
+
+def analyze_signature(data: dict) -> dict:
+    """
+    Analyze trajectory signature and predict missile type
+    
+    Key features:
+    - KN-23: Peak altitude < 70km, terminal pull-up maneuver
+    - Nodong: Peak altitude > 200km, high parabolic arc
+    - SCUD-B: Medium altitude (80-150km), short range
+    """
+    if not data:
+        return {"predicted_type": "UNKNOWN", "confidence": 0, "reasons": []}
+    
+    max_alt_km = data.get('max_altitude_km', 0)
+    range_km = data.get('range_km', 0)
+    
+    # Detect pull-up maneuver (KN-23 signature)
+    has_pullup = detect_pullup_maneuver(data)
+    
+    # Score each missile type
+    scores = {}
+    reasons = {}
+    
+    for missile_type, profile in SIGNATURE_PROFILES.items():
+        score = 0
+        type_reasons = []
+        
+        alt_min, alt_max = profile["altitude_range"]
+        range_min, range_max = profile["range_range"]
+        
+        # Altitude check
+        if alt_min <= max_alt_km <= alt_max:
+            score += 35
+            type_reasons.append(f"Altitude {max_alt_km:.1f}km matches {missile_type} profile ({alt_min}-{alt_max}km)")
+        elif max_alt_km < alt_min and missile_type == "KN-23":
+            score += 30
+            type_reasons.append(f"Very low altitude ({max_alt_km:.1f}km) - depressed trajectory")
+        
+        # Range check
+        if range_min <= range_km <= range_max:
+            score += 25
+            type_reasons.append(f"Range {range_km:.1f}km matches {missile_type} profile")
+        
+        # Pull-up detection (critical for KN-23)
+        if profile["has_pullup"] and has_pullup:
+            score += 35
+            type_reasons.append("Terminal pull-up maneuver detected!")
+        elif not profile["has_pullup"] and not has_pullup:
+            score += 15
+            type_reasons.append("No pull-up maneuver (standard ballistic)")
+        
+        # KN-23 specific: low altitude + decent range
+        if missile_type == "KN-23" and max_alt_km < 70 and range_km > 400:
+            score += 20
+            type_reasons.append("Quasi-ballistic signature: low apogee with extended range")
+        
+        # Nodong specific: very high altitude
+        if missile_type == "Nodong" and max_alt_km > 200:
+            score += 20
+            type_reasons.append("High parabolic arc detected")
+        
+        scores[missile_type] = score
+        reasons[missile_type] = type_reasons
+    
+    # Find best match
+    best_type = max(scores, key=scores.get)
+    total_score = sum(scores.values())
+    confidence = scores[best_type] / max(total_score, 1) * 100
+    
+    # Boost confidence for clear KN-23 signature
+    if best_type == "KN-23" and max_alt_km < 60 and has_pullup:
+        confidence = min(confidence + 15, 99)
+    
+    result = {
+        "predicted_type": best_type,
+        "confidence": round(confidence, 1),
+        "reasons": reasons[best_type],
+        "features": {
+            "max_altitude_km": round(max_alt_km, 1),
+            "range_km": round(range_km, 1),
+            "flight_time_s": round(data.get('flight_time_s', 0), 1),
+            "has_pullup": has_pullup
+        },
+        "all_scores": scores
+    }
+    
+    GameState.identification_result = result
+    return result
+
+
+def detect_pullup_maneuver(data: dict) -> bool:
+    """
+    Detect terminal pull-up maneuver (KN-23 signature)
+    
+    Look for sudden pitch-up at 10-30km altitude during descent
+    """
+    z = data.get('z', [])
+    gamma = data.get('gamma', [])
+    alpha = data.get('alpha', [])
+    
+    if len(z) < 50 or len(gamma) < 50:
+        return False
+    
+    # Find apogee
+    apogee_idx = z.index(max(z))
+    
+    # Check terminal phase (after apogee, in 10-30km altitude range)
+    for i in range(apogee_idx + 10, len(z) - 5):
+        alt_km = z[i] / 1000
+        
+        if 10 < alt_km < 30:
+            # Check gamma (flight path angle) increase
+            if i > 0 and len(gamma) > i:
+                gamma_change = gamma[i] - gamma[i-1]
+                if gamma_change > 0.5:  # Significant positive change
+                    return True
+            
+            # Check alpha (angle of attack) spike
+            if len(alpha) > i and abs(alpha[i]) > 0.15:  # > ~8.5 degrees
+                return True
+    
+    return False
+
+
+def run_visualization(npz_path: str):
+    """Run main_visualization.py to show graphs"""
+    try:
+        # Ensure absolute paths
+        npz_abs_path = str(Path(npz_path).resolve())
+        main_viz_script = SCRIPT_DIR / "main_visualization.py"
+        
+        print(f"\n{'='*50}")
+        print(f"🚀 Launching Visualization")
+        print(f"   Script: {main_viz_script}")
+        print(f"   NPZ: {npz_abs_path}")
+        print(f"   Python: {PYTHON_EXE}")
+        print(f"{'='*50}")
+        
+        if main_viz_script.exists():
+            # Run: python main_visualization.py --file <npz_path>
+            # Use CREATE_NEW_CONSOLE on Windows for visible window
+            import platform
+            
+            if platform.system() == 'Windows':
+                # Windows: create new console window
+                CREATE_NEW_CONSOLE = 0x00000010
+                subprocess.Popen(
+                    [PYTHON_EXE, str(main_viz_script), "--file", npz_abs_path],
+                    cwd=str(SCRIPT_DIR),
+                    creationflags=CREATE_NEW_CONSOLE
+                )
+            else:
+                # Unix/Mac
+                subprocess.Popen(
+                    [PYTHON_EXE, str(main_viz_script), "--file", npz_abs_path],
+                    cwd=str(SCRIPT_DIR)
+                )
+            
+            print(f"✓ Launched main_visualization.py for: {Path(npz_path).name}")
+        else:
+            # Fallback to view_npz.py
+            view_script = SCRIPT_DIR / "view_npz.py"
+            if view_script.exists():
+                import platform
+                if platform.system() == 'Windows':
+                    CREATE_NEW_CONSOLE = 0x00000010
+                    subprocess.Popen(
+                        [PYTHON_EXE, str(view_script), npz_abs_path],
+                        creationflags=CREATE_NEW_CONSOLE
+                    )
+                else:
+                    subprocess.Popen([PYTHON_EXE, str(view_script), npz_abs_path])
+                print(f"✓ Launched view_npz.py for: {Path(npz_path).name}")
+            else:
+                print(f"⚠ No visualization script found")
+    except Exception as e:
+        import traceback
+        print(f"⚠ Error launching visualization: {e}")
+        traceback.print_exc()
+
+
+# =============================================================================
+# API Server
+# =============================================================================
+
+class GameAPIHandler(BaseHTTPRequestHandler):
+    """HTTP API handler for the game"""
+    
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        
+        response = {"error": "Unknown endpoint"}
+        status = 404
+        
+        if path == "/api/status":
+            response = {
+                "status": "ready",
+                "has_hidden_missile": GameState.hidden_missile is not None,
+                "revealed": GameState.revealed
+            }
+            status = 200
+            
+        elif path == "/api/start":
+            # Start new game - select random missile
+            missile_type, npz_path = select_random_missile()
+            if missile_type:
+                response = {
+                    "status": "started",
+                    "message": "Missile selected (hidden)"
+                }
+                status = 200
+            else:
+                response = {"error": "No NPZ files available"}
+                status = 500
+                
+        elif path == "/api/analyze":
+            # Load data and run signature analysis
+            if GameState.npz_path:
+                data = load_npz_data(GameState.npz_path)
+                if data:
+                    result = analyze_signature(data)
+                    response = {
+                        "status": "analyzed",
+                        "identification": result
+                    }
+                    status = 200
+                else:
+                    response = {"error": "Failed to load NPZ data"}
+                    status = 500
+            else:
+                response = {"error": "No missile selected. Call /api/start first"}
+                status = 400
+                
+        elif path == "/api/visualize":
+            # Launch visualization popup
+            if GameState.npz_path:
+                run_visualization(GameState.npz_path)
+                response = {"status": "visualization_launched"}
+                status = 200
+            else:
+                response = {"error": "No missile selected"}
+                status = 400
+                
+        elif path == "/api/reveal":
+            # Reveal the actual missile type
+            GameState.revealed = True
+            response = {
+                "actual_type": GameState.hidden_missile,
+                "npz_file": Path(GameState.npz_path).name if GameState.npz_path else None,
+                "profile": SIGNATURE_PROFILES.get(GameState.hidden_missile, {})
+            }
+            status = 200
+            
+        elif path == "/api/identification":
+            # Get current identification result
+            if GameState.identification_result:
+                response = GameState.identification_result
+                status = 200
+            else:
+                response = {"error": "No analysis performed yet"}
+                status = 404
+        
+        self._send_response(response, status)
+    
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        
+        response = {"error": "Unknown endpoint"}
+        status = 404
+        
+        if path == "/api/reset":
+            # Reset game state
+            GameState.hidden_missile = None
+            GameState.npz_path = None
+            GameState.trajectory_data = None
+            GameState.identification_result = None
+            GameState.revealed = False
+            response = {"status": "reset"}
+            status = 200
+            
+        elif path == "/api/guess":
+            # Handle user guess
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            try:
+                data = json.loads(body) if body else {}
+                user_guess = data.get("guess", "")
+                
+                is_correct = user_guess == GameState.hidden_missile
+                GameState.revealed = True
+                
+                response = {
+                    "user_guess": user_guess,
+                    "actual_type": GameState.hidden_missile,
+                    "is_correct": is_correct,
+                    "identification": GameState.identification_result
+                }
+                status = 200
+            except json.JSONDecodeError:
+                response = {"error": "Invalid JSON"}
+                status = 400
+        
+        self._send_response(response, status)
+    
+    def _send_response(self, data: dict, status: int = 200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+    
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass  # Suppress logging
+
+
+def run_server(port: int = 5000):
+    """Run the API server"""
+    # Auto-select missile at startup
+    select_random_missile()
+    
+    server = HTTPServer(('localhost', port), GameAPIHandler)
+    print(f"\n🚀 Game Server running on http://localhost:{port}")
+    print(f"\nAPI Endpoints:")
+    print(f"  GET  /api/status      - Server status")
+    print(f"  GET  /api/start       - Start new game (random missile)")
+    print(f"  GET  /api/analyze     - Run signature analysis")
+    print(f"  GET  /api/visualize   - Launch graph popup")
+    print(f"  GET  /api/reveal      - Reveal actual missile")
+    print(f"  GET  /api/identification - Get analysis result")
+    print(f"  POST /api/guess       - Submit user guess")
+    print(f"  POST /api/reset       - Reset game")
+    print(f"\nPress Ctrl+C to stop")
+    
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n\nServer stopped.")
+        server.shutdown()
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Missile Identification Game Server')
+    parser.add_argument('--port', type=int, default=5000, help='Server port')
+    parser.add_argument('--demo', action='store_true', help='Run demo analysis')
+    
+    args = parser.parse_args()
+    
+    if args.demo:
+        # Demo mode
+        print("\n" + "="*60)
+        print("🎯 Missile Identification Demo")
+        print("="*60)
+        
+        missile_type, npz_path = select_random_missile()
+        if npz_path:
+            data = load_npz_data(npz_path)
+            result = analyze_signature(data)
+            
+            print(f"\n📊 SIGNATURE ANALYSIS:")
+            print(f"  Predicted: {result['predicted_type']}")
+            print(f"  Confidence: {result['confidence']}%")
+            print(f"\n  Features:")
+            for k, v in result['features'].items():
+                print(f"    • {k}: {v}")
+            print(f"\n  Reasons:")
+            for reason in result['reasons']:
+                print(f"    • {reason}")
+            
+            print(f"\n🎯 ACTUAL: {GameState.hidden_missile}")
+            correct = result['predicted_type'] == GameState.hidden_missile
+            print(f"  Result: {'✓ CORRECT' if correct else '✗ INCORRECT'}")
+    else:
+        run_server(args.port)

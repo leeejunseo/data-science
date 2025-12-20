@@ -5,10 +5,15 @@
 radar_6dof_simulator.py 기반 + NPZ 저장/로드 기능 추가
 """
 import os
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+import platform
+
+# Set Qt platform only on Linux
+if platform.system() == 'Linux':
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 import numpy as np
 import matplotlib
+# Use TkAgg backend for cross-platform GUI support
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import datetime
@@ -16,6 +21,9 @@ from scipy.integrate import solve_ivp
 
 # missile_6dof_true 사용 (Quaternion 기반 True 6DOF)
 from missile_6dof_true import True6DOFSimulator
+
+# KN-23 Depressed Trajectory Simulator
+from kn23_depressed import KN23Depressed
 
 # NPZ I/O 모듈
 try:
@@ -46,8 +54,14 @@ class MissileVisualization6DOF:
         self.npz_path = None
         self.sol = None
         
-        # True6DOFSimulator 객체 생성
-        self.sim = True6DOFSimulator(missile_type=missile_type)
+        # KN-23의 경우 KN23Depressed 시뮬레이터 사용
+        if missile_type == "KN-23":
+            self.sim = KN23Depressed()
+            self.use_kn23_depressed = True
+        else:
+            # True6DOFSimulator 객체 생성
+            self.sim = True6DOFSimulator(missile_type=missile_type)
+            self.use_kn23_depressed = False
     
     def run_simulation(self, launch_angle_deg=45, azimuth_deg=90, sim_time=600):
         """
@@ -73,11 +87,15 @@ class MissileVisualization6DOF:
         print("=" * 60)
         
         try:
-            # True6DOFSimulator의 simulate() 메소드 호출
-            sim_results = self.sim.simulate(elevation_deg=launch_angle_deg, azimuth_deg=azimuth_deg)
-            
-            # 결과를 main_visualization 형식으로 변환
-            self._convert_results_from_true6dof(sim_results)
+            # KN-23 Depressed 시뮬레이터 사용
+            if self.use_kn23_depressed:
+                sim_results = self.sim.simulate(launch_angle=launch_angle_deg)
+                self._convert_results_from_kn23_depressed(sim_results)
+            else:
+                # True6DOFSimulator의 simulate() 메소드 호출
+                sim_results = self.sim.simulate(elevation_deg=launch_angle_deg, azimuth_deg=azimuth_deg)
+                # 결과를 main_visualization 형식으로 변환
+                self._convert_results_from_true6dof(sim_results)
             
             # 요약 정보
             final_time = self.results['time'][-1]
@@ -191,6 +209,74 @@ class MissileVisualization6DOF:
             'phi': phi,
             'theta': theta_wrapped,  # ✅ Wrapped!
             'psi_euler': psi,  # 오일러 요각 (같은 값 사용)
+            'p': p,
+            'q': q,
+            'r': r,
+            'alpha': alpha,
+            'beta': beta,
+            'mach': mach,
+            'mass': mass,
+            'fuel': fuel
+        }
+    
+    def _convert_results_from_kn23_depressed(self, sim_results):
+        """
+        KN23Depressed 결과를 main_visualization 형식으로 변환
+        
+        Parameters:
+        -----------
+        sim_results : dict
+            시뮬레이션 결과 (KN23Depressed.simulate() 반환값)
+        """
+        t = sim_results['time']
+        x = sim_results['x']
+        z = sim_results['z']  # altitude
+        Vx = sim_results['Vx']
+        Vz = sim_results['Vz']
+        V = sim_results['V']
+        theta = sim_results['theta']  # pitch angle
+        gamma = sim_results['gamma']  # flight path angle
+        alpha = sim_results['alpha']  # angle of attack
+        
+        # KN23Depressed는 2D (x-z plane) 시뮬레이션이므로 y=0
+        y = np.zeros_like(x)
+        
+        # mach 계산
+        T = 288.15 - 0.0065 * z
+        T[z > 11000] = 216.65
+        a = np.sqrt(1.4 * 287.05 * T)
+        mach = V / a
+        
+        # mass 계산 (KN23Depressed에서 가져오기)
+        mass = np.array([self.sim.get_mass(ti) for ti in t])
+        
+        # 2D 시뮬레이션이므로 roll, yaw 관련 값은 0
+        phi = np.zeros_like(t)  # roll
+        psi = np.zeros_like(t)  # yaw
+        p = np.zeros_like(t)    # roll rate
+        r = np.zeros_like(t)    # yaw rate
+        
+        # pitch rate (q) 계산: dtheta/dt
+        q = np.gradient(theta, t)
+        
+        # beta (sideslip) = 0 for 2D
+        beta = np.zeros_like(t)
+        
+        # 연료
+        fuel = mass[0] - mass
+        
+        # results 딕셔너리 생성
+        self.results = {
+            'time': t,
+            'x': x,
+            'y': y,
+            'h': z,
+            'velocity': V,
+            'gamma': gamma,
+            'psi': psi,
+            'phi': phi,
+            'theta': theta,
+            'psi_euler': psi,
             'p': p,
             'q': q,
             'r': r,
@@ -500,6 +586,45 @@ class MissileVisualization6DOF:
 
 def main():
     """메인 함수"""
+    import sys
+    import argparse
+    
+    # 명령줄 인자 파싱
+    parser = argparse.ArgumentParser(description='6DOF 미사일 시각화 시스템')
+    parser.add_argument('--file', '-f', type=str, help='NPZ 파일 경로 (직접 로드)')
+    parser.add_argument('--missile', '-m', type=str, choices=['SCUD-B', 'KN-23', 'Nodong'], 
+                        default='SCUD-B', help='미사일 종류')
+    parser.add_argument('--angle', '-a', type=float, default=45, help='발사각 (도)')
+    parser.add_argument('--azimuth', '-z', type=float, default=90, help='방위각 (도)')
+    
+    args = parser.parse_args()
+    
+    # NPZ 파일이 지정된 경우 바로 로드하여 그래프 표시
+    if args.file:
+        print(f"\n📊 NPZ 파일 로드: {args.file}")
+        
+        # 파일명에서 미사일 타입 추출
+        from pathlib import Path
+        fname = Path(args.file).name
+        if 'SCUD' in fname:
+            missile_name = "SCUD-B"
+        elif 'Nodong' in fname:
+            missile_name = "Nodong"
+        elif 'KN-23' in fname:
+            missile_name = "KN-23"
+        else:
+            missile_name = "SCUD-B"
+        
+        viz = MissileVisualization6DOF(missile_type=missile_name)
+        if viz.load_from_npz(args.file):
+            print(f"✓ 로드 성공: {missile_name}")
+            viz.plot_comprehensive()
+            plt.show()  # 그래프 창 유지
+        else:
+            print(f"⚠ 로드 실패: {args.file}")
+        return
+    
+    # 대화형 모드
     print("\n" + "=" * 60)
     print("6DOF 미사일 시각화 시스템 (True6DOF Quaternion 기반)")
     print("=" * 60 + "\n")
@@ -531,6 +656,7 @@ def main():
         npz_file = input("NPZ 파일 경로: ").strip()
         if viz.load_from_npz(npz_file):
             viz.plot_comprehensive()
+            plt.show()
     else:
         # 새 시뮬레이션
         launch_angle = float(input("발사각 (도, 기본값: 45): ").strip() or "45")
@@ -547,6 +673,7 @@ def main():
             
             # 시각화
             viz.plot_comprehensive()
+            plt.show()
             
             print(f"\n✓ 완료! NPZ 파일: {npz_path}")
         else:
