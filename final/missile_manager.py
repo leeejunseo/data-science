@@ -30,6 +30,15 @@ from missile_6dof_true import True6DOFSimulator, MISSILES
 from kn23_depressed import KN23Depressed
 from config_6dof import MISSILE_TYPES
 
+# NPZ I/O 모듈 (표준화된 저장)
+try:
+    from trajectory_io import save_trajectory_unified, DEFAULT_OUTPUT_DIR
+    _trajectory_io_available = True
+except ImportError:
+    save_trajectory_unified = None
+    DEFAULT_OUTPUT_DIR = None
+    _trajectory_io_available = False
+
 
 # =============================================================================
 # Data Classes
@@ -131,11 +140,23 @@ class MissileManager:
         else:
             return True6DOFSimulator(missile_type=missile_type)
     
-    def run_simulation(self, launch_angle: float = 45, azimuth: float = 90) -> Dict:
+    def run_simulation(self, launch_angle: float = 45, azimuth: float = 90, 
+                       save_npz: bool = True, seed: int = 0) -> Dict:
         """
         Run simulation and return trajectory data
         
         Returns trajectory without revealing missile type
+        
+        Parameters:
+        -----------
+        launch_angle : float
+            발사각 (deg)
+        azimuth : float
+            방위각 (deg)
+        save_npz : bool
+            NPZ 파일 저장 여부
+        seed : int
+            시뮬레이션 시드 (파일명용)
         """
         if self.current_missile is None:
             self.select_random_missile()
@@ -147,6 +168,7 @@ class MissileManager:
         
         self.trajectory_buffer = []
         self.is_simulating = True
+        self._last_raw_result = None  # 원본 결과 저장
         
         # Get simulator
         sim = self.get_simulator(self.current_missile)
@@ -159,17 +181,44 @@ class MissileManager:
             result = sim.simulate(elevation_deg=launch_angle, azimuth_deg=azimuth)
             trajectory = self._convert_6dof_result(result)
         
+        self._last_raw_result = result
         self.trajectory_buffer = trajectory
         self.is_simulating = False
         
         # Run identification
         self.identification_result = self.identify_missile(trajectory)
         
+        # NPZ 저장 (표준 포맷)
+        npz_path = None
+        if save_npz and _trajectory_io_available and result is not None:
+            npz_path = self._save_trajectory_npz(result, launch_angle, azimuth, seed)
+        
         return {
             "trajectory": trajectory,
             "identification": asdict(self.identification_result) if self.identification_result else None,
-            "actual_type": None  # Hidden until user guesses
+            "actual_type": None,  # Hidden until user guesses
+            "npz_path": npz_path
         }
+    
+    def _save_trajectory_npz(self, result: Dict, launch_angle: float, 
+                              azimuth: float, seed: int) -> Optional[str]:
+        """시뮬레이션 결과를 표준 NPZ 포맷으로 저장"""
+        if not _trajectory_io_available:
+            return None
+        
+        try:
+            filepath = save_trajectory_unified(
+                results=result,
+                missile_type=self.current_missile,
+                elevation=launch_angle,
+                azimuth=azimuth,
+                seed=seed,
+                output_dir=DEFAULT_OUTPUT_DIR
+            )
+            return filepath
+        except Exception as e:
+            print(f"⚠ NPZ 저장 실패: {e}")
+            return None
     
     def _convert_kn23_result(self, result: Dict) -> List[Dict]:
         """Convert KN23Depressed result to standard format"""

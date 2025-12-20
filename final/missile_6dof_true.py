@@ -1177,7 +1177,9 @@ def save_signature_data(df: pd.DataFrame, output_dir: str,
         arrays = {col: df[col].values for col in numeric_cols}
         arrays['missile_type'] = np.array([missile_type])
         arrays['elevation_deg'] = np.array([elevation])
-        np.savez_compressed(npz_path, **arrays)
+        # 표준 NPZ 저장 함수 사용
+        from trajectory_io import save_npz_generic
+        save_npz_generic(npz_path, arrays)
     
     return str(csv_path) if csv_path else None, str(npz_path) if npz_path else None
 

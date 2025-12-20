@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from missile_6dof_true import True6DOFSimulator
     import config_6dof as cfg
-    print("✓ missile_6dof_true, config_6dof 모듈 로드 성공")
+    from trajectory_io import save_npz_generic
+    print("✓ missile_6dof_true, config_6dof, trajectory_io 모듈 로드 성공")
 except ImportError as e:
     print(f"✗ 모듈 로드 실패: {e}")
     sys.exit(1)
@@ -481,30 +482,28 @@ class MissileSignatureGenerator:
         
         # 1. 시그니처 특성 저장
         features_file = self.output_dir / f"signature_features_{timestamp}.npz"
-        np.savez_compressed(
-            features_file,
-            features=features,
-            labels=labels,
-            feature_names=self.SIGNATURE_FEATURES,
-            missile_types=missile_types,
-            n_samples=len(features),
-            n_features=len(self.SIGNATURE_FEATURES)
-        )
+        save_npz_generic(features_file, {
+            'features': features,
+            'labels': labels,
+            'feature_names': self.SIGNATURE_FEATURES,
+            'missile_types': missile_types,
+            'n_samples': len(features),
+            'n_features': len(self.SIGNATURE_FEATURES)
+        })
         
         # 2. 궤적 데이터 저장
         trajectory_file = self.output_dir / f"trajectories_{timestamp}.npz"
         traj_dict = {f'traj_{i}': traj for i, traj in enumerate(trajectories)}
-        np.savez_compressed(trajectory_file, **traj_dict)
+        save_npz_generic(trajectory_file, traj_dict)
         
         # 3. 메타데이터 저장
         meta_file = self.output_dir / f"metadata_{timestamp}.npz"
-        np.savez_compressed(
-            meta_file,
-            metadata=metadata,
-            generation_stats=self.generation_stats,
-            launch_angles=self.launch_angles,
-            azimuth_angles=self.azimuth_angles
-        )
+        save_npz_generic(meta_file, {
+            'metadata': metadata,
+            'generation_stats': self.generation_stats,
+            'launch_angles': self.launch_angles,
+            'azimuth_angles': self.azimuth_angles
+        })
         
         print(f"\n💾 데이터셋 저장 완료:")
         print(f"   시그니처: {features_file}")

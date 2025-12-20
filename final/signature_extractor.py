@@ -22,6 +22,9 @@ from missile_6dof_true import (
     True6DOFSimulator, MISSILES, G0, get_atmosphere, quat_to_dcm, quat_to_euler
 )
 
+# 표준 NPZ 저장 함수 사용
+from trajectory_io import save_npz_generic
+
 
 # ============================================================================
 # 시그니처 데이터 추출 함수
@@ -308,7 +311,7 @@ def save_signature_data(df: pd.DataFrame, output_dir: str,
         arrays['elevation_deg'] = np.array([elevation])
         arrays['column_names'] = np.array(list(numeric_cols))
         
-        np.savez_compressed(npz_path, **arrays)
+        save_npz_generic(npz_path, arrays)
         print(f"  ✓ NPZ 저장: {npz_path}")
     
     return str(csv_path) if csv_path else None, str(npz_path) if npz_path else None

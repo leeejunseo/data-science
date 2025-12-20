@@ -25,14 +25,22 @@ from missile_6dof_true import True6DOFSimulator
 # KN-23 Depressed Trajectory Simulator
 from kn23_depressed import KN23Depressed
 
-# NPZ I/O 모듈
+# NPZ I/O 모듈 (표준화된 저장)
 try:
-    from trajectory_io import save_trajectory, load_trajectory, validate_trajectory
+    from trajectory_io import (
+        save_trajectory_unified, 
+        load_trajectory, 
+        validate_trajectory,
+        DEFAULT_OUTPUT_DIR
+    )
+    _trajectory_io_available = True
 except ImportError:
     print("⚠ trajectory_io 모듈 없음. NPZ 저장/로드 기능 비활성화")
-    save_trajectory = None
+    save_trajectory_unified = None
     load_trajectory = None
     validate_trajectory = None
+    DEFAULT_OUTPUT_DIR = None
+    _trajectory_io_available = False
 
 # matplotlib 설정
 plt.rcParams['axes.unicode_minus'] = False
@@ -287,16 +295,20 @@ class MissileVisualization6DOF:
             'fuel': fuel
         }
     
-    def save_to_npz(self, filepath=None, launch_angle_deg=45):
+    def save_to_npz(self, filepath=None, launch_angle_deg=45, azimuth_deg=90, seed=0):
         """
-        결과를 NPZ 파일로 저장
+        결과를 NPZ 파일로 저장 (표준 포맷)
         
         Parameters:
         -----------
         filepath : str, optional
-            저장 경로
+            저장 경로 (None이면 표준 경로/파일명 자동 생성)
         launch_angle_deg : float
             발사각 (메타데이터)
+        azimuth_deg : float
+            방위각 (메타데이터)
+        seed : int
+            시뮬레이션 시드
         
         Returns:
         --------
@@ -307,54 +319,23 @@ class MissileVisualization6DOF:
             print("⚠ 먼저 시뮬레이션을 실행하세요.")
             return None
         
-        if save_trajectory is None:
+        if not _trajectory_io_available:
             print("⚠ trajectory_io 모듈이 없어 NPZ 저장 불가")
             return None
         
-        # 파일 경로 자동 생성
-        if filepath is None:
-            os.makedirs('results_6dof', exist_ok=True)
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            filepath = f"results_6dof/{self.missile_type}_{launch_angle_deg}deg_{timestamp}.npz"
-        
-        # Trajectory Frame에서 Body Frame으로 역변환 (근사)
-        # V, gamma, psi -> u, v, w 변환
-        V = self.results['velocity']
-        gamma = self.results['gamma']
-        psi = self.results['psi']
-        phi = self.results['phi']
-        theta = self.results['theta']
-        
-        # 간단한 변환 (정확하지 않지만 시각화용으로 충분)
-        u = V * np.cos(gamma) * np.cos(psi)
-        v = V * np.cos(gamma) * np.sin(psi)
-        w = V * np.sin(gamma)
-        
-        # NPZ 저장
-        save_trajectory(
-            filepath=filepath,
-            time=self.results['time'],
-            position_x=self.results['x'],
-            position_y=self.results['y'],
-            position_z=self.results['h'],
-            u=u,
-            v=v,
-            w=w,
-            phi=self.results['phi'],
-            theta=self.results['theta'],
-            psi=self.results['psi_euler'],
-            p=self.results['p'],
-            q=self.results['q'],
-            r=self.results['r'],
-            mass=self.results['mass'],
-            V=V,
-            gamma=gamma,
-            chi=psi,
+        # 표준 통합 저장 함수 사용
+        filepath = save_trajectory_unified(
+            results=self.results,
             missile_type=self.missile_type,
-            launch_angle=launch_angle_deg,
-            alpha=self.results.get('alpha', np.zeros_like(self.results['time'])),
-            beta=self.results.get('beta', np.zeros_like(self.results['time'])),
-            mach=self.results.get('mach', np.zeros_like(self.results['time']))
+            elevation=launch_angle_deg,
+            azimuth=azimuth_deg,
+            seed=seed,
+            output_dir=DEFAULT_OUTPUT_DIR,
+            extra_metadata={
+                'alpha': self.results.get('alpha', np.zeros_like(self.results['time'])),
+                'beta': self.results.get('beta', np.zeros_like(self.results['time'])),
+                'mach': self.results.get('mach', np.zeros_like(self.results['time']))
+            }
         )
         
         self.npz_path = filepath
