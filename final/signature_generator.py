@@ -30,9 +30,9 @@ try:
     from missile_6dof_true import True6DOFSimulator
     import config_6dof as cfg
     from trajectory_io import save_npz_generic
-    print("✓ missile_6dof_true, config_6dof, trajectory_io 모듈 로드 성공")
+    print("[OK] missile_6dof_true, config_6dof, trajectory_io load success")
 except ImportError as e:
-    print(f"✗ 모듈 로드 실패: {e}")
+    print(f"[FAIL] Module load failed: {e}")
     sys.exit(1)
 
 
@@ -48,51 +48,35 @@ class MissileSignatureGenerator:
     """
     
     # 지원 미사일 타입
-    SUPPORTED_MISSILES = ["SCUD-B", "NODONG", "KN-23"]
+    SUPPORTED_MISSILES = ["SCUD-B", "Nodong", "KN-23"]
     
     # 시그니처 특성 정의 (32차원)
+    # ================================================================
+    # 레이더 관측 기반 시그니처 (12차원)
+    # - 설계상수/내부정보 제외 (burnout_velocity, burn_time_ratio,
+    #   thrust_to_weight_initial, angular_momentum_ratio,
+    #   dynamic_stability_index, ballistic_coefficient, glide_ratio,
+    #   reentry_heating_index 등)
+    # - 레이더로 관측 가능한 궤적/속도/기동 특성만 사용
+    # ================================================================
     SIGNATURE_FEATURES = [
-        # 기하학적 특성 (8개)
+        # 궤적 형태 (4개) - 레이더 추적으로 관측 가능
         'max_altitude_km',           # 최대 고도
         'final_range_km',            # 최종 사거리
-        'altitude_range_ratio',      # 고도/사거리 비율
-        'apogee_time_ratio',         # 정점 도달 시간 비율
-        'path_efficiency',           # 경로 효율성
-        'ground_track_curvature',    # 지상 궤적 곡률
         'impact_angle_deg',          # 낙하각
         'total_flight_time',         # 총 비행시간
         
-        # 속도 특성 (6개)
+        # 속도/마하 (4개) - 레이더 도플러로 관측 가능
         'max_velocity',              # 최대 속도
-        'burnout_velocity',          # 연소종료 속도
         'terminal_velocity',         # 종말 속도
-        'velocity_loss_ratio',       # 속도 손실률
         'max_mach',                  # 최대 마하수
-        'mach_at_apogee',            # 정점 마하수
+        'velocity_loss_ratio',       # 속도 손실률
         
-        # 가속도 특성 (4개)
-        'max_acceleration',          # 최대 가속도
+        # 감속/기동/효율 (4개) - 궤적 변화로 추정 가능
         'max_deceleration',          # 최대 감속도
-        'burn_time_ratio',           # 연소시간 비율
-        'thrust_to_weight_initial',  # 초기 추력/중량비
-        
-        # 6DOF 고유 특성 (10개) ★ 핵심 시그니처
-        'alpha_max_deg',             # 최대 받음각
-        'alpha_mean_deg',            # 평균 받음각
-        'alpha_std_deg',             # 받음각 표준편차
-        'q_max_deg_s',               # 최대 피치 각속도
-        'q_mean_deg_s',              # 평균 피치 각속도
-        'alpha_q_correlation',       # α-q 상관계수 ★
-        'alpha_q_phase_area',        # α-q 위상면적 ★
-        'p_r_coupling_strength',     # Roll-Yaw 커플링 ★
-        'angular_momentum_ratio',    # 각운동량 비율
-        'dynamic_stability_index',   # 동적 안정성 지수
-        
-        # 추가 파생 특성 (4개)
-        'ballistic_coefficient',     # 탄도계수
-        'energy_ratio',              # 에너지 비율
-        'glide_ratio',               # 활공비
-        'reentry_heating_index',     # 재진입 가열 지수
+        'ground_track_curvature',    # 지상 궤적 곡률
+        'path_efficiency',           # 경로 효율성
+        'energy_ratio',              # 에너지 비율 (관측 가능)
     ]
     
     def __init__(self, output_dir: str = "signature_dataset"):
@@ -249,7 +233,7 @@ class MissileSignatureGenerator:
             launch_angle: 발사각
         
         Returns:
-            features: 32차원 시그니처 벡터
+            features: 12차원 레이더 관측 기반 시그니처 벡터
         """
         try:
             t = results['time']
@@ -311,19 +295,25 @@ class MissileSignatureGenerator:
             
             features = np.zeros(len(self.SIGNATURE_FEATURES), dtype=np.float32)
             
-            # === 기하학적 특성 (8개) ===
+            # === 궤적 형태 (4개) - 레이더 추적으로 관측 가능 ===
             max_h = np.max(h)
             final_range = np.sqrt(x[-1]**2 + y[-1]**2)
             apogee_idx = np.argmax(h)
             
             features[0] = max_h / 1000  # max_altitude_km
             features[1] = final_range / 1000  # final_range_km
-            features[2] = max_h / (final_range + 1e-6)  # altitude_range_ratio
-            features[3] = t[apogee_idx] / t[-1]  # apogee_time_ratio
+            features[2] = np.abs(np.rad2deg(gamma[-1]))  # impact_angle_deg (낙하각)
+            features[3] = t[-1]  # total_flight_time
             
-            # 경로 효율성
-            path_length = np.sum(np.sqrt(np.diff(x)**2 + np.diff(y)**2 + np.diff(h)**2))
-            features[4] = final_range / (path_length + 1e-6)  # path_efficiency
+            # === 속도/마하 (4개) - 레이더 도플러로 관측 가능 ===
+            features[4] = np.max(V)  # max_velocity
+            features[5] = V[-1]  # terminal_velocity
+            features[6] = np.max(mach)  # max_mach
+            features[7] = (np.max(V) - V[-1]) / (np.max(V) + 1e-6)  # velocity_loss_ratio
+            
+            # === 감속/기동/효율 (4개) - 궤적 변화로 추정 가능 ===
+            dV_dt = np.gradient(V, t)
+            features[8] = np.min(dV_dt)  # max_deceleration
             
             # 지상 궤적 곡률
             dx = np.gradient(x)
@@ -331,96 +321,16 @@ class MissileSignatureGenerator:
             ddx = np.gradient(dx)
             ddy = np.gradient(dy)
             curvature = np.abs(dx*ddy - dy*ddx) / (dx**2 + dy**2 + 1e-6)**1.5
-            features[5] = np.mean(curvature[~np.isnan(curvature)])  # ground_track_curvature
+            features[9] = np.mean(curvature[~np.isnan(curvature)])  # ground_track_curvature
             
-            # 낙하각 (마지막 gamma)
-            features[6] = np.abs(np.rad2deg(gamma[-1]))  # impact_angle_deg
-            features[7] = t[-1]  # total_flight_time
+            # 경로 효율성
+            path_length = np.sum(np.sqrt(np.diff(x)**2 + np.diff(y)**2 + np.diff(h)**2))
+            features[10] = final_range / (path_length + 1e-6)  # path_efficiency
             
-            # === 속도 특성 (6개) ===
-            burn_idx = np.argmin(np.abs(t - burn_time))
-            
-            features[8] = np.max(V)  # max_velocity
-            features[9] = V[min(burn_idx, len(V)-1)]  # burnout_velocity
-            features[10] = V[-1]  # terminal_velocity
-            features[11] = (np.max(V) - V[-1]) / (np.max(V) + 1e-6)  # velocity_loss_ratio
-            features[12] = np.max(mach)  # max_mach
-            features[13] = mach[apogee_idx]  # mach_at_apogee
-            
-            # === 가속도 특성 (4개) ===
-            dV_dt = np.gradient(V, t)
-            features[14] = np.max(dV_dt)  # max_acceleration
-            features[15] = np.min(dV_dt)  # max_deceleration
-            features[16] = burn_time / t[-1]  # burn_time_ratio
-            
-            # 초기 추력/중량비 (추정)
-            isp = missile_info.get('isp_sea', 230)
-            propellant_mass = missile_info.get('propellant_mass', 4875)
-            thrust = isp * (propellant_mass / burn_time) * 9.81
-            features[17] = thrust / (initial_mass * 9.81)  # thrust_to_weight_initial
-            
-            # === 6DOF 고유 특성 (10개) ★ 핵심 ===
-            alpha_deg = np.rad2deg(alpha)
-            q_deg_s = np.rad2deg(q)
-            p_deg_s = np.rad2deg(p)
-            r_deg_s = np.rad2deg(r)
-            
-            features[18] = np.max(np.abs(alpha_deg))  # alpha_max_deg
-            features[19] = np.mean(np.abs(alpha_deg))  # alpha_mean_deg
-            features[20] = np.std(alpha_deg)  # alpha_std_deg
-            features[21] = np.max(np.abs(q_deg_s))  # q_max_deg_s
-            features[22] = np.mean(np.abs(q_deg_s))  # q_mean_deg_s
-            
-            # α-q 상관계수 ★
-            valid_mask = ~(np.isnan(alpha_deg) | np.isnan(q_deg_s))
-            if np.sum(valid_mask) > 10:
-                corr = np.corrcoef(alpha_deg[valid_mask], q_deg_s[valid_mask])[0, 1]
-                features[23] = corr if not np.isnan(corr) else 0  # alpha_q_correlation
-            
-            # α-q 위상면적 ★ (Shoelace formula)
-            try:
-                area = 0.5 * np.abs(np.sum(alpha_deg[:-1] * q_deg_s[1:] - 
-                                           alpha_deg[1:] * q_deg_s[:-1]))
-                features[24] = np.log1p(area)  # alpha_q_phase_area (log scale)
-            except:
-                features[24] = 0
-            
-            # Roll-Yaw 커플링 ★
-            valid_mask = ~(np.isnan(p_deg_s) | np.isnan(r_deg_s))
-            if np.sum(valid_mask) > 10:
-                corr = np.corrcoef(p_deg_s[valid_mask], r_deg_s[valid_mask])[0, 1]
-                features[25] = corr if not np.isnan(corr) else 0  # p_r_coupling_strength
-            
-            # 각운동량 비율
-            I_ratio = 1.0  # I_yy / I_zz (실제론 미사일별 다름)
-            features[26] = np.mean(np.abs(q)) / (np.mean(np.abs(r)) + 1e-6)  # angular_momentum_ratio
-            
-            # 동적 안정성 지수 (alpha 변동성 기반)
-            alpha_variation = np.std(np.diff(alpha_deg))
-            features[27] = 1.0 / (1.0 + alpha_variation)  # dynamic_stability_index
-            
-            # === 추가 파생 특성 (4개) ===
-            # 탄도계수 (BC = m / (Cd * A))
-            ref_area = missile_info.get('reference_area', 0.6)
-            cd_base = missile_info.get('cd_base', 0.3)
-            features[28] = initial_mass / (cd_base * ref_area + 1e-6)  # ballistic_coefficient
-            
-            # 에너지 비율 (운동에너지 / 위치에너지)
+            # 에너지 비율 (운동에너지 / 위치에너지) - 레이더 관측으로 추정 가능
             KE = 0.5 * mass[-1] * V[-1]**2
             PE = mass[-1] * 9.81 * max_h
-            features[29] = KE / (PE + 1e-6)  # energy_ratio
-            
-            # 활공비 (탄도비행 구간)
-            if apogee_idx < len(h) - 10:
-                descent_range = np.sqrt((x[-1]-x[apogee_idx])**2 + (y[-1]-y[apogee_idx])**2)
-                descent_alt = h[apogee_idx]
-                features[30] = descent_range / (descent_alt + 1e-6)  # glide_ratio
-            
-            # 재진입 가열 지수 (속도 * 밀도^0.5)
-            # 간단히 최대 동압 사용
-            rho_approx = 1.225 * np.exp(-h / 8500)  # 지수 대기 모델
-            q_dynamic = 0.5 * rho_approx * V**2
-            features[31] = np.max(q_dynamic) / 1e6  # reentry_heating_index (MPa)
+            features[11] = KE / (PE + 1e-6)  # energy_ratio
             
             # NaN 처리
             features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
@@ -700,38 +610,38 @@ def visualize_signatures(
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 2. 주요 시그니처: α-q correlation
+    # 2. 궤적 형상: 고도 vs 사거리
     ax = axes[0, 1]
-    alpha_q_idx = feature_names.index('alpha_q_correlation') if 'alpha_q_correlation' in feature_names else 23
-    alpha_max_idx = feature_names.index('alpha_max_deg') if 'alpha_max_deg' in feature_names else 18
-    for i, m_type in enumerate(missile_types):
-        mask = labels == i
-        ax.scatter(features[mask, alpha_max_idx], features[mask, alpha_q_idx],
-                  c=[colors[i]], label=m_type, alpha=0.6, s=30)
-    ax.set_xlabel('Max Alpha (deg)')
-    ax.set_ylabel('Alpha-Q Correlation')
-    ax.set_title('6DOF Signature: Alpha Dynamics')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    # 3. 궤적 형상: 고도/사거리 비율
-    ax = axes[0, 2]
-    alt_range_idx = feature_names.index('altitude_range_ratio') if 'altitude_range_ratio' in feature_names else 2
+    alt_idx = feature_names.index('max_altitude_km') if 'max_altitude_km' in feature_names else 0
     range_idx = feature_names.index('final_range_km') if 'final_range_km' in feature_names else 1
     for i, m_type in enumerate(missile_types):
         mask = labels == i
-        ax.scatter(features[mask, range_idx], features[mask, alt_range_idx],
+        ax.scatter(features[mask, range_idx], features[mask, alt_idx],
                   c=[colors[i]], label=m_type, alpha=0.6, s=30)
     ax.set_xlabel('Range (km)')
-    ax.set_ylabel('Altitude/Range Ratio')
+    ax.set_ylabel('Max Altitude (km)')
     ax.set_title('Trajectory Shape')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # 3. 마하수 vs 비행시간
+    ax = axes[0, 2]
+    mach_idx = feature_names.index('max_mach') if 'max_mach' in feature_names else 6
+    time_idx = feature_names.index('total_flight_time') if 'total_flight_time' in feature_names else 3
+    for i, m_type in enumerate(missile_types):
+        mask = labels == i
+        ax.scatter(features[mask, time_idx], features[mask, mach_idx],
+                  c=[colors[i]], label=m_type, alpha=0.6, s=30)
+    ax.set_xlabel('Flight Time (s)')
+    ax.set_ylabel('Max Mach')
+    ax.set_title('Mach vs Flight Time')
     ax.legend()
     ax.grid(True, alpha=0.3)
     
     # 4. 속도 특성
     ax = axes[1, 0]
-    max_v_idx = feature_names.index('max_velocity') if 'max_velocity' in feature_names else 8
-    term_v_idx = feature_names.index('terminal_velocity') if 'terminal_velocity' in feature_names else 10
+    max_v_idx = feature_names.index('max_velocity') if 'max_velocity' in feature_names else 4
+    term_v_idx = feature_names.index('terminal_velocity') if 'terminal_velocity' in feature_names else 5
     for i, m_type in enumerate(missile_types):
         mask = labels == i
         ax.scatter(features[mask, max_v_idx], features[mask, term_v_idx],
@@ -742,17 +652,17 @@ def visualize_signatures(
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 5. 동적 특성
+    # 5. 감속도 vs 경로 효율
     ax = axes[1, 1]
-    q_max_idx = feature_names.index('q_max_deg_s') if 'q_max_deg_s' in feature_names else 21
-    stab_idx = feature_names.index('dynamic_stability_index') if 'dynamic_stability_index' in feature_names else 27
+    decel_idx = feature_names.index('max_deceleration') if 'max_deceleration' in feature_names else 8
+    eff_idx = feature_names.index('path_efficiency') if 'path_efficiency' in feature_names else 10
     for i, m_type in enumerate(missile_types):
         mask = labels == i
-        ax.scatter(features[mask, q_max_idx], features[mask, stab_idx],
+        ax.scatter(features[mask, decel_idx], features[mask, eff_idx],
                   c=[colors[i]], label=m_type, alpha=0.6, s=30)
-    ax.set_xlabel('Max Pitch Rate (deg/s)')
-    ax.set_ylabel('Dynamic Stability Index')
-    ax.set_title('6DOF Dynamic Signature')
+    ax.set_xlabel('Max Deceleration (m/s²)')
+    ax.set_ylabel('Path Efficiency')
+    ax.set_title('Deceleration & Efficiency')
     ax.legend()
     ax.grid(True, alpha=0.3)
     
@@ -791,7 +701,7 @@ def main():
     generator = MissileSignatureGenerator(output_dir="signature_dataset")
     
     features, labels, metadata = generator.generate_dataset(
-        missile_types=["SCUD-B", "NODONG", "KN-23"],
+        missile_types=["SCUD-B", "Nodong", "KN-23"],
         samples_per_angle=3,
         noise_std=0.5
     )

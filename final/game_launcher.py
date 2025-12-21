@@ -18,10 +18,16 @@ import json
 import random
 import subprocess
 import sys
+import io
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 import os
+
+# Windows 콘솔 UTF-8 인코딩 설정
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent
