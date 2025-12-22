@@ -45,6 +45,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import joblib
 
 
 # =============================================================================
@@ -244,6 +245,43 @@ def main():
      - 랜덤 Split 평가보다 낮은 정확도가 나올 수 있으며, 
        이는 모델이 특정 발사각에 과적합되지 않았음을 의미합니다.
 """)
+    
+    # ---------------------------------------------------------------------
+    # 7. 모델 저장 (게임 연동용)
+    # ---------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("💾 STEP 7: 모델 저장")
+    print("=" * 70)
+    
+    model_dir = Path("trained_models")
+    model_dir.mkdir(exist_ok=True)
+    
+    # 전체 데이터로 재학습 (게임용 최종 모델)
+    print("🎯 전체 데이터로 최종 모델 학습 중...")
+    scaler_final = StandardScaler()
+    X_all_scaled = scaler_final.fit_transform(features)
+    
+    model_final = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=15,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1
+    )
+    model_final.fit(X_all_scaled, labels)
+    
+    # 저장
+    joblib.dump(model_final, model_dir / "rf_model.pkl")
+    joblib.dump(scaler_final, model_dir / "scaler.pkl")
+    joblib.dump(feature_names, model_dir / "feature_names.pkl")
+    joblib.dump(missile_types, model_dir / "missile_types.pkl")
+    
+    print(f"✅ 모델 저장 완료:")
+    print(f"   - {model_dir / 'rf_model.pkl'}")
+    print(f"   - {model_dir / 'scaler.pkl'}")
+    print(f"   - {model_dir / 'feature_names.pkl'}")
+    print(f"   - {model_dir / 'missile_types.pkl'}")
     
     return 0
 

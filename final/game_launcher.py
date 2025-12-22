@@ -23,6 +23,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 import os
+import joblib
 
 # Windows 콘솔 UTF-8 인코딩 설정
 if sys.platform == 'win32':
@@ -33,6 +34,42 @@ if sys.platform == 'win32':
 SCRIPT_DIR = Path(__file__).parent
 RESULTS_DIR = SCRIPT_DIR / "results_6dof"
 SIGNATURE_DIR = SCRIPT_DIR / "signature_datasets"
+MODEL_DIR = SCRIPT_DIR / "trained_models"
+
+# =============================================================================
+# ML 모델 로드
+# =============================================================================
+ML_MODEL = None
+ML_SCALER = None
+ML_FEATURE_NAMES = None
+ML_MISSILE_TYPES = None
+
+def load_ml_model():
+    """Load trained ML model from eval_by_angle.py"""
+    global ML_MODEL, ML_SCALER, ML_FEATURE_NAMES, ML_MISSILE_TYPES
+    
+    model_path = MODEL_DIR / "rf_model.pkl"
+    scaler_path = MODEL_DIR / "scaler.pkl"
+    features_path = MODEL_DIR / "feature_names.pkl"
+    types_path = MODEL_DIR / "missile_types.pkl"
+    
+    if not model_path.exists():
+        print(f"⚠ ML 모델 없음: {model_path}")
+        print("   먼저 eval_by_angle.py를 실행하세요.")
+        return False
+    
+    try:
+        ML_MODEL = joblib.load(model_path)
+        ML_SCALER = joblib.load(scaler_path)
+        ML_FEATURE_NAMES = joblib.load(features_path)
+        ML_MISSILE_TYPES = joblib.load(types_path)
+        print(f"✅ ML 모델 로드 완료:")
+        print(f"   - 특성: {len(ML_FEATURE_NAMES)}개")
+        print(f"   - 미사일: {ML_MISSILE_TYPES}")
+        return True
+    except Exception as e:
+        print(f"⚠ ML 모델 로드 실패: {e}")
+        return False
 
 # Find Python executable (prefer venv)
 def get_python_executable():
@@ -151,17 +188,139 @@ def load_npz_data(npz_path: str) -> dict:
         return None
 
 
+def extract_12_features(data: dict) -> np.ndarray:
+    """
+    Extract 12 radar-observable features from trajectory data
+    Same features as signature_generator.py
+    """
+    t = np.array(data.get('time', []))
+    x = np.array(data.get('x', []))
+    y = np.array(data.get('y', []))
+    h = np.array(data.get('z', []))
+    V = np.array(data.get('V', []))
+    gamma = np.array(data.get('gamma', []))
+    mach = np.array(data.get('mach', []))
+    
+    if len(t) < 10:
+        return None
+    
+    features = np.zeros(12, dtype=np.float32)
+    
+    # 1. max_altitude_km
+    max_h = np.max(h)
+    features[0] = max_h / 1000
+    
+    # 2. final_range_km
+    final_range = np.sqrt(x[-1]**2 + y[-1]**2)
+    features[1] = final_range / 1000
+    
+    # 3. impact_angle_deg
+    features[2] = np.abs(np.rad2deg(gamma[-1])) if len(gamma) > 0 else 0
+    
+    # 4. total_flight_time
+    features[3] = t[-1]
+    
+    # 5. max_velocity
+    features[4] = np.max(V)
+    
+    # 6. terminal_velocity
+    features[5] = V[-1]
+    
+    # 7. max_mach
+    features[6] = np.max(mach) if len(mach) > 0 else np.max(V) / 340
+    
+    # 8. velocity_loss_ratio
+    features[7] = (np.max(V) - V[-1]) / (np.max(V) + 1e-6)
+    
+    # 9. max_deceleration
+    dV_dt = np.gradient(V, t)
+    features[8] = np.min(dV_dt)
+    
+    # 10. ground_track_curvature
+    dx = np.gradient(x)
+    dy = np.gradient(y)
+    ddx = np.gradient(dx)
+    ddy = np.gradient(dy)
+    curvature = np.abs(dx*ddy - dy*ddx) / (dx**2 + dy**2 + 1e-6)**1.5
+    features[9] = np.nanmean(curvature)
+    
+    # 11. path_efficiency
+    path_length = np.sum(np.sqrt(np.diff(x)**2 + np.diff(y)**2 + np.diff(h)**2))
+    features[10] = final_range / (path_length + 1e-6)
+    
+    # 12. energy_ratio (use last mass approximation)
+    # Assume final mass ~ 30% of initial for typical missile
+    est_mass = 1000  # approximate
+    KE = 0.5 * est_mass * V[-1]**2
+    PE = est_mass * 9.81 * max_h
+    features[11] = KE / (PE + 1e-6)
+    
+    # NaN 처리
+    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    return features
+
+
+def analyze_signature_ml(data: dict) -> dict:
+    """
+    ML 기반 미사일 분류 (12개 시그니처 사용)
+    """
+    if ML_MODEL is None or ML_SCALER is None:
+        return None
+    
+    features = extract_12_features(data)
+    if features is None:
+        return None
+    
+    # Scale and predict
+    features_scaled = ML_SCALER.transform([features])
+    prediction = ML_MODEL.predict(features_scaled)[0]
+    probabilities = ML_MODEL.predict_proba(features_scaled)[0]
+    
+    predicted_type = ML_MISSILE_TYPES[prediction]
+    confidence = float(probabilities[prediction] * 100)
+    
+    # Feature importance 기반 이유 생성
+    feature_dict = dict(zip(ML_FEATURE_NAMES, features))
+    reasons = [
+        f"ML 분류: {predicted_type} (신뢰도: {confidence:.1f}%)",
+        f"최대고도: {feature_dict.get('max_altitude_km', 0):.1f} km",
+        f"사거리: {feature_dict.get('final_range_km', 0):.1f} km",
+        f"최대마하: {feature_dict.get('max_mach', 0):.2f}",
+    ]
+    
+    result = {
+        "predicted_type": predicted_type,
+        "confidence": round(confidence, 1),
+        "reasons": reasons,
+        "features": feature_dict,
+        "all_probabilities": {
+            ML_MISSILE_TYPES[i]: round(float(p) * 100, 1) 
+            for i, p in enumerate(probabilities)
+        },
+        "method": "ML (RandomForest, 12 features)"
+    }
+    
+    return result
+
+
 def analyze_signature(data: dict) -> dict:
     """
     Analyze trajectory signature and predict missile type
-    
-    Key features:
-    - KN-23: Peak altitude < 70km, terminal pull-up maneuver
-    - Nodong: Peak altitude > 200km, high parabolic arc
-    - SCUD-B: Medium altitude (80-150km), short range
+    Uses ML model if available, otherwise falls back to rule-based
     """
     if not data:
         return {"predicted_type": "UNKNOWN", "confidence": 0, "reasons": []}
+    
+    # Try ML-based analysis first
+    if ML_MODEL is not None:
+        ml_result = analyze_signature_ml(data)
+        if ml_result is not None:
+            GameState.identification_result = ml_result
+            return ml_result
+    
+    # Fallback to rule-based analysis
+    print("⚠ ML 모델 없음, 규칙 기반 분류 사용")
     
     max_alt_km = data.get('max_altitude_km', 0)
     range_km = data.get('range_km', 0)
@@ -478,6 +637,9 @@ class GameAPIHandler(BaseHTTPRequestHandler):
 
 def run_server(port: int = 5000):
     """Run the API server"""
+    # Load ML model at startup
+    load_ml_model()
+    
     # Auto-select missile at startup
     select_random_missile()
     
@@ -519,6 +681,9 @@ if __name__ == "__main__":
         print("\n" + "="*60)
         print("🎯 Missile Identification Demo")
         print("="*60)
+        
+        # Load ML model
+        load_ml_model()
         
         missile_type, npz_path = select_random_missile()
         if npz_path:

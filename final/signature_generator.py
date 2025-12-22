@@ -50,7 +50,7 @@ class MissileSignatureGenerator:
     # 지원 미사일 타입
     SUPPORTED_MISSILES = ["SCUD-B", "Nodong", "KN-23"]
     
-    # 시그니처 특성 정의 (32차원)
+    # 시그니처 특성 정의 (12차원)
     # ================================================================
     # 레이더 관측 기반 시그니처 (12차원)
     # - 설계상수/내부정보 제외 (burnout_velocity, burn_time_ratio,
@@ -124,7 +124,7 @@ class MissileSignatureGenerator:
             noise_std: 발사각 노이즈 표준편차 (도)
         
         Returns:
-            features: 시그니처 특성 배열 [N, 32]
+            features: 시그니처 특성 배열 [N, 12]
             labels: 미사일 타입 레이블 [N]
             metadata: 메타데이터 딕셔너리
         """
