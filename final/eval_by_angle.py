@@ -52,7 +52,8 @@ import joblib
 # 설정
 # =============================================================================
 
-DATASET_FILE = Path("signature_dataset") / "dataset_large.npz"
+SCRIPT_DIR = Path(__file__).parent
+DATASET_FILE = SCRIPT_DIR / "signature_dataset" / "dataset_large.npz"
 
 
 # =============================================================================
@@ -253,7 +254,7 @@ def main():
     print("💾 STEP 7: 모델 저장")
     print("=" * 70)
     
-    model_dir = Path("trained_models")
+    model_dir = SCRIPT_DIR / "trained_models"
     model_dir.mkdir(exist_ok=True)
     
     # 전체 데이터로 재학습 (게임용 최종 모델)
