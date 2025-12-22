@@ -17,11 +17,17 @@
 import numpy as np
 import os
 import sys
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
+
+# Windows 콘솔 UTF-8 인코딩 설정
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 현재 디렉토리를 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,14 +56,15 @@ class MissileSignatureGenerator:
     # 지원 미사일 타입
     SUPPORTED_MISSILES = ["SCUD-B", "Nodong", "KN-23"]
     
-    # 시그니처 특성 정의 (12차원)
+    # 시그니처 특성 정의 (15차원)
     # ================================================================
-    # 레이더 관측 기반 시그니처 (12차원)
+    # 레이더 관측 기반 시그니처 (12차원) + 6DOF 기동성 보강 (3차원)
     # - 설계상수/내부정보 제외 (burnout_velocity, burn_time_ratio,
     #   thrust_to_weight_initial, angular_momentum_ratio,
     #   dynamic_stability_index, ballistic_coefficient, glide_ratio,
     #   reentry_heating_index 등)
-    # - 레이더로 관측 가능한 궤적/속도/기동 특성만 사용
+    # - 레이더로 관측 가능한 궤적/속도/기동 특성 사용
+    # - 6DOF 기동성 지표 최소 추가 (alpha_std, q_max, alpha_q_corr)
     # ================================================================
     SIGNATURE_FEATURES = [
         # 궤적 형태 (4개) - 레이더 추적으로 관측 가능
@@ -77,6 +84,11 @@ class MissileSignatureGenerator:
         'ground_track_curvature',    # 지상 궤적 곡률
         'path_efficiency',           # 경로 효율성
         'energy_ratio',              # 에너지 비율 (관측 가능)
+        
+        # 6DOF 기동성 보강 (3개) - 탄도 불안정성/기동 특성
+        'alpha_std_deg',             # 받음각 표준편차 (기동 강도)
+        'q_max_deg_s',               # 최대 피치율 (급기동 지표)
+        'alpha_q_correlation',       # 받음각-피치율 상관계수 (동적 안정성)
     ]
     
     def __init__(self, output_dir: str = "signature_dataset"):
@@ -124,7 +136,7 @@ class MissileSignatureGenerator:
             noise_std: 발사각 노이즈 표준편차 (도)
         
         Returns:
-            features: 시그니처 특성 배열 [N, 12]
+            features: 시그니처 특성 배열 [N, 15]
             labels: 미사일 타입 레이블 [N]
             metadata: 메타데이터 딕셔너리
         """
@@ -233,7 +245,7 @@ class MissileSignatureGenerator:
             launch_angle: 발사각
         
         Returns:
-            features: 12차원 레이더 관측 기반 시그니처 벡터
+            features: 15차원 시그니처 벡터 (레이더 12 + 6DOF 기동성 3)
         """
         try:
             t = results['time']
@@ -331,6 +343,21 @@ class MissileSignatureGenerator:
             KE = 0.5 * mass[-1] * V[-1]**2
             PE = mass[-1] * 9.81 * max_h
             features[11] = KE / (PE + 1e-6)  # energy_ratio
+            
+            # === 6DOF 기동성 보강 (3개) ===
+            # 받음각 표준편차 (기동 강도 지표)
+            alpha_deg = np.rad2deg(alpha)
+            features[12] = np.std(alpha_deg)  # alpha_std_deg
+            
+            # 최대 피치율 (급기동 지표)
+            q_deg_s = np.rad2deg(q)  # q는 이미 results에서 가져옴
+            features[13] = np.max(np.abs(q_deg_s))  # q_max_deg_s
+            
+            # 받음각-피치율 상관계수 (동적 안정성)
+            if len(alpha_deg) > 10 and np.std(alpha_deg) > 1e-6 and np.std(q_deg_s) > 1e-6:
+                features[14] = np.corrcoef(alpha_deg, q_deg_s)[0, 1]  # alpha_q_correlation
+            else:
+                features[14] = 0.0
             
             # NaN 처리
             features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)

@@ -188,9 +188,9 @@ def load_npz_data(npz_path: str) -> dict:
         return None
 
 
-def extract_12_features(data: dict) -> np.ndarray:
+def extract_15_features(data: dict) -> np.ndarray:
     """
-    Extract 12 radar-observable features from trajectory data
+    Extract 15 features from trajectory data (12 radar + 3 6DOF)
     Same features as signature_generator.py
     """
     t = np.array(data.get('time', []))
@@ -200,11 +200,13 @@ def extract_12_features(data: dict) -> np.ndarray:
     V = np.array(data.get('V', []))
     gamma = np.array(data.get('gamma', []))
     mach = np.array(data.get('mach', []))
+    alpha = np.array(data.get('alpha', []))
+    q = np.array(data.get('q', []))  # pitch rate (if available)
     
     if len(t) < 10:
         return None
     
-    features = np.zeros(12, dtype=np.float32)
+    features = np.zeros(15, dtype=np.float32)
     
     # 1. max_altitude_km
     max_h = np.max(h)
@@ -249,11 +251,41 @@ def extract_12_features(data: dict) -> np.ndarray:
     features[10] = final_range / (path_length + 1e-6)
     
     # 12. energy_ratio (use last mass approximation)
-    # Assume final mass ~ 30% of initial for typical missile
     est_mass = 1000  # approximate
     KE = 0.5 * est_mass * V[-1]**2
     PE = est_mass * 9.81 * max_h
     features[11] = KE / (PE + 1e-6)
+    
+    # === 6DOF 기동성 보강 (3개) ===
+    # 13. alpha_std_deg (받음각 표준편차)
+    if len(alpha) > 10:
+        alpha_deg = np.rad2deg(alpha)
+        features[12] = np.std(alpha_deg)
+    else:
+        features[12] = 0.0
+    
+    # 14. q_max_deg_s (최대 피치율)
+    if len(q) > 10:
+        q_deg_s = np.rad2deg(q)
+        features[13] = np.max(np.abs(q_deg_s))
+    else:
+        # Estimate from gamma if q not available
+        if len(gamma) > 10:
+            dgamma_dt = np.gradient(gamma, t)
+            features[13] = np.max(np.abs(np.rad2deg(dgamma_dt)))
+        else:
+            features[13] = 0.0
+    
+    # 15. alpha_q_correlation (받음각-피치율 상관계수)
+    if len(alpha) > 10 and len(q) > 10:
+        alpha_deg = np.rad2deg(alpha)
+        q_deg_s = np.rad2deg(q)
+        if np.std(alpha_deg) > 1e-6 and np.std(q_deg_s) > 1e-6:
+            features[14] = np.corrcoef(alpha_deg, q_deg_s)[0, 1]
+        else:
+            features[14] = 0.0
+    else:
+        features[14] = 0.0
     
     # NaN 처리
     features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
@@ -263,12 +295,12 @@ def extract_12_features(data: dict) -> np.ndarray:
 
 def analyze_signature_ml(data: dict) -> dict:
     """
-    ML 기반 미사일 분류 (12개 시그니처 사용)
+    ML 기반 미사일 분류 (15개 시그니처 사용: 레이더 12 + 6DOF 3)
     """
     if ML_MODEL is None or ML_SCALER is None:
         return None
     
-    features = extract_12_features(data)
+    features = extract_15_features(data)
     if features is None:
         return None
     
@@ -298,7 +330,7 @@ def analyze_signature_ml(data: dict) -> dict:
             ML_MISSILE_TYPES[i]: round(float(p) * 100, 1) 
             for i, p in enumerate(probabilities)
         },
-        "method": "ML (RandomForest, 12 features)"
+        "method": "ML (RandomForest, 15 features)"
     }
     
     return result
