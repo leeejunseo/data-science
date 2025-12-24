@@ -168,6 +168,7 @@ def load_npz_data(npz_path: str) -> dict:
             'gamma': data['gamma'].tolist() if 'gamma' in data else [],
             'alpha': data['alpha'].tolist() if 'alpha' in data else [],
             'mach': data['mach'].tolist() if 'mach' in data else [],
+            'q': data['q'].tolist() if 'q' in data else [],  # pitch rate for ML
         }
         
         # Calculate key features
