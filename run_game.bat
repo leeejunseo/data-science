@@ -18,11 +18,16 @@ if not exist ".venv\Scripts\python.exe" (
 
 :: Start Python API Server (game_launcher.py)
 echo [1/2] Python 백엔드 서버 시작 중...
-start "Missile API Server" cmd /k "cd /d %~dp0final && %~dp0.venv\Scripts\python.exe game_launcher.py --port 5000"
+echo.
+echo ========================================
+echo   백엔드 서버 로그
+echo ========================================
+echo.
+cd /d "%~dp0final"
+%~dp0.venv\Scripts\python.exe -u game_launcher.py --port 5000
 
-:: Wait for server to start
-echo      서버 시작 대기 중 (3초)...
-timeout /t 3 /nobreak > nul
+:: Server stopped, pause before closing
+pause
 
 :: Check if node_modules exists
 if not exist "lastpang\node_modules" (

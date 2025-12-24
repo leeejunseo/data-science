@@ -25,6 +25,13 @@ const GameApp = () => {
   const [score, setScore] = useState({ correct: 0, total: 0 });
   const [showAIHint, setShowAIHint] = useState(false);
   const [analysisMessage, setAnalysisMessage] = useState('');
+  const [mlProcessSteps, setMlProcessSteps] = useState([]);
+  const [graphImageUrl, setGraphImageUrl] = useState(null);
+  const [mlDetails, setMlDetails] = useState(null);
+  const [showMLVisualization, setShowMLVisualization] = useState(false);
+  const [currentTreeIndex, setCurrentTreeIndex] = useState(0);
+  const [featureAnimationIndex, setFeatureAnimationIndex] = useState(0);
+  const [trajectoryParams, setTrajectoryParams] = useState(null);
   
   // Canvas refs
   const canvas2dRef = useRef(null);
@@ -80,6 +87,16 @@ const GameApp = () => {
     }
   }, [isFlying, flightProgress]);
 
+  // Tree voting animation
+  useEffect(() => {
+    if (showMLVisualization && mlDetails && mlDetails.tree_predictions) {
+      const interval = setInterval(() => {
+        setCurrentTreeIndex(prev => (prev + 1) % mlDetails.tree_predictions.length);
+      }, 500); // Change highlighted tree every 500ms
+      return () => clearInterval(interval);
+    }
+  }, [showMLVisualization, mlDetails]);
+
   // Korea map coordinates
   const koreaMap = {
     pyongyang: { x: 0.35, y: 0.36, name: '평양' },
@@ -113,36 +130,128 @@ const GameApp = () => {
     }
   };
 
-  // Handle "예측하기" button click - trigger analysis
+  // Handle "예측하기" button click - trigger analysis and visualization simultaneously
   const handleAnalyze = async () => {
     if (gameMode !== 'flying' && gameMode !== 'analyzing_ready') return;
     
     setIsFlying(false);  // Stop animation
     setGameMode('analyzing');
-    setAnalysisMessage('시그니처 분석 중... 실제 .npz 데이터 로드 중...');
+    setMlProcessSteps([]);
+    setGraphImageUrl(null);
+    
+    // Show ML processing steps
+    const addStep = (step) => {
+      setMlProcessSteps(prev => [...prev, { text: step, timestamp: Date.now() }]);
+    };
+    
+    addStep('📡 NPZ 데이터 로드 중...');
+    setAnalysisMessage('시그니처 분석 중... ML 모델 예측 실행 중...');
+    
+    await new Promise(resolve => setTimeout(resolve, 500));
+    addStep('🔍 15개 특징 추출 중 (레이더 12개 + 6DOF 3개)...');
     
     try {
-      // 1. Call backend to analyze real .npz data
-      const response = await fetch(`${API_BASE}/api/analyze`);
-      if (response.ok) {
-        const data = await response.json();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      addStep('⚙️ 특징 정규화 (StandardScaler)...');
+      
+      // Call both APIs simultaneously (parallel execution)
+      const [analyzeResponse, visualizeResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/analyze`),
+        fetch(`${API_BASE}/api/visualize`)
+      ]);
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
+      addStep('🤖 RandomForest 모델 추론 중...');
+      
+      if (analyzeResponse.ok) {
+        const data = await analyzeResponse.json();
+        
+        // Debug: Log the full response
+        console.log('=== API Response ===', data);
+        console.log('identification:', data.identification);
+        console.log('ml_details:', data.identification?.ml_details);
+        
+        // Store ML details for visualization
+        if (data.identification && data.identification.ml_details) {
+          console.log('✅ ML details found, setting state');
+          setMlDetails(data.identification.ml_details);
+          setShowMLVisualization(true);
+        } else {
+          console.warn('⚠️ No ml_details in response');
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 500));
+        addStep('📊 확률 분포 계산 완료');
+        addStep(`✅ 예측 완료: ${data.identification.predicted_type} (신뢰도: ${data.identification.confidence}%)`);
+        
         setIdentification(data.identification);
         
-        // 2. Trigger main_visualization.py popup
-        fetch(`${API_BASE}/api/visualize`);
+        // Set graph image if available
+        if (data.graph_image) {
+          setGraphImageUrl(`data:image/png;base64,${data.graph_image}`);
+          addStep('📈 그래프 생성 완료');
+        }
         
-        setGameMode('guessing');
-        setAnalysisMessage('분석 완료! 그래프를 확인하고 미사일 종류를 선택하세요.');
+        // Set actual missile type (but don't show yet)
+        if (data.actual_missile) {
+          setActualType(data.actual_missile);
+        }
+        
+        // Store trajectory parameters
+        if (data.trajectory_params) {
+          setTrajectoryParams(data.trajectory_params);
+        }
+        
+        // ML이 자동으로 예측 완료 - 바로 정답 확인
+        setGameMode('ml_predicting');
+        setAnalysisMessage('ML 모델 분석 완료! 예측 결과를 확인하세요.');
+        
+        // 자동으로 ML 예측을 정답으로 제출
+        setTimeout(() => {
+          handleMLPrediction(data.identification.predicted_type);
+        }, 8000); // 8초 후 자동 제출 (ML 시각화 시간 확보)
+        
+        if (visualizeResponse.ok) {
+          console.log('✓ Visualization launched successfully');
+        }
       } else {
         throw new Error('Analysis failed');
       }
     } catch (error) {
       console.log('Backend unavailable, using local analysis');
-      // Fallback: local identification based on actualType
+      addStep('⚠️ 백엔드 연결 실패, 로컬 분석 사용');
       const localIdent = generateLocalIdentification();
       setIdentification(localIdent);
-      setGameMode('guessing');
-      setAnalysisMessage('분석 완료! 미사일 종류를 선택하세요.');
+      setGameMode('ml_predicting');
+      setAnalysisMessage('ML 모델 분석 완료! 예측 결과를 확인하세요.');
+      setTimeout(() => {
+        handleMLPrediction(localIdent.predicted_type);
+      }, 3000);
+    }
+  };
+
+  // Handle ML prediction (automatic)
+  const handleMLPrediction = async (mlPrediction) => {
+    setUserGuess(mlPrediction);
+    
+    // Get actual type from backend
+    try {
+      const response = await fetch(`${API_BASE}/api/reveal`);
+      if (response.ok) {
+        const data = await response.json();
+        setActualType(data.actual_type);
+        
+        // Update score based on ML prediction
+        const isCorrect = mlPrediction === data.actual_type;
+        setScore(prev => ({
+          correct: prev.correct + (isCorrect ? 1 : 0),
+          total: prev.total + 1
+        }));
+        setGameMode('revealed');
+        return;
+      }
+    } catch (error) {
+      console.log('Error revealing actual type');
     }
   };
 
@@ -257,6 +366,13 @@ const GameApp = () => {
     setUserGuess(null);
     setShowAIHint(false);
     setAnalysisMessage('');
+    setMlProcessSteps([]);
+    setGraphImageUrl(null);
+    setMlDetails(null);
+    setShowMLVisualization(false);
+    setCurrentTreeIndex(0);
+    setFeatureAnimationIndex(0);
+    setTrajectoryParams(null);
     
     try {
       await fetch(`${API_BASE}/api/reset`, { method: 'POST' });
@@ -487,10 +603,19 @@ const GameApp = () => {
                     disabled
                     className="bg-gray-600 rounded px-4 py-2 flex items-center gap-2 font-semibold cursor-not-allowed"
                   >
-                    <AlertTriangle size={18} className="animate-pulse" /> 분석 중...
+                    <AlertTriangle size={18} className="animate-pulse" /> ML 분석 중...
                   </button>
                 )}
-                {/* Guessing state */}
+                {/* ML Predicting state */}
+                {gameMode === 'ml_predicting' && (
+                  <button
+                    disabled
+                    className="bg-purple-600 rounded px-4 py-2 flex items-center gap-2 font-semibold cursor-not-allowed"
+                  >
+                    <AlertTriangle size={18} className="animate-pulse" /> ML 예측 완료
+                  </button>
+                )}
+                {/* Guessing state (legacy - not used in ML mode) */}
                 {gameMode === 'guessing' && (
                   <span className="bg-green-800 rounded px-4 py-2 text-sm font-semibold">
                     미사일 종류를 선택하세요!
@@ -509,13 +634,24 @@ const GameApp = () => {
             </div>
             
             <div className="relative flex justify-center">
-              <canvas
-                ref={canvas2dRef}
-                width={600}
-                height={500}
-                className="rounded border border-gray-700 cursor-pointer"
-                onClick={handleMissileClick}
-              />
+              {/* Show graph if available, otherwise show radar */}
+              {graphImageUrl ? (
+                <div className="w-full">
+                  <img 
+                    src={graphImageUrl} 
+                    alt="Missile Trajectory Visualization" 
+                    className="w-full rounded border border-gray-700"
+                  />
+                </div>
+              ) : (
+                <canvas
+                  ref={canvas2dRef}
+                  width={600}
+                  height={500}
+                  className="rounded border border-gray-700 cursor-pointer"
+                  onClick={handleMissileClick}
+                />
+              )}
               
               {/* Status message */}
               {analysisMessage && (
@@ -536,16 +672,40 @@ const GameApp = () => {
                 <Target size={18} className="text-yellow-400" />
                 게임 방법
               </h3>
-              <div className="space-y-2 text-sm text-gray-400">
+              <div className="space-y-1.5 text-sm text-gray-400">
                 <p>1. <span className="text-red-400">시뮬레이션 시작</span> 버튼 클릭</p>
-                <p>2. 비행 중 <span className="text-yellow-400">예측하기</span> 버튼 클릭</p>
-                <p>3. 물리 그래프 분석 (고도, Alpha 등)</p>
-                <p>4. 시그니처 기반 미사일 종류 맞추기!</p>
+                <p>2. <span className="text-yellow-400">예측하기</span> 버튼 클릭</p>
+                <p>3. <span className="text-green-400">6DOF 시뮬레이션</span> 자동 실행</p>
+                <p>4. <span className="text-purple-400">ML 자동 분석</span> 및 예측</p>
+                <p>5. 그래프 + 분석 결과 확인</p>
+                <p>6. ML 정확도 평가!</p>
               </div>
               <div className="mt-3 pt-3 border-t border-gray-700 text-xs">
-                <p className="text-gray-500">힌트: KN-23은 저고도(&lt;70km) + Pull-up 기동</p>
+                <p className="text-gray-500">💡 실시간 생성: 고각 15~80°, 방위각 90° 고정</p>
+                <p className="text-gray-500">💡 KN-23: 저고도(&lt;70km) + Pull-up 기동</p>
               </div>
             </div>
+
+            {/* ML Processing Steps */}
+            {(gameMode === 'analyzing' || gameMode === 'ml_predicting') && mlProcessSteps.length > 0 && (
+              <div className="bg-gray-800 rounded-lg p-4 border border-cyan-500">
+                <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                  <AlertTriangle size={18} className="text-cyan-400 animate-pulse" />
+                  ML 처리 과정
+                </h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {mlProcessSteps.map((step, idx) => (
+                    <div 
+                      key={idx} 
+                      className="text-sm text-gray-300 bg-black/30 rounded px-3 py-2 animate-fadeIn"
+                      style={{ animationDelay: `${idx * 0.1}s` }}
+                    >
+                      {step.text}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Features Display */}
             {identification && identification.features && (
@@ -574,36 +734,212 @@ const GameApp = () => {
               </div>
             )}
 
-            {/* AI Hint */}
-            {gameMode === 'guessing' && identification && (
-              <div className="bg-gray-800 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-lg font-semibold flex items-center gap-2">
-                    <AlertTriangle size={18} className="text-yellow-400" />
-                    AI 분석
+            {/* ML Analysis Results - Always visible when available */}
+            {(gameMode === 'ml_predicting' || gameMode === 'revealed') && identification && (
+              <div className="bg-gradient-to-br from-purple-900/50 to-blue-900/50 rounded-lg p-4 border border-purple-500">
+                <div className="mb-3">
+                  <h3 className="text-lg font-semibold flex items-center gap-2 mb-2">
+                    <AlertTriangle size={18} className="text-purple-400" />
+                    ML 모델 예측 결과
                   </h3>
-                  <button
-                    onClick={() => setShowAIHint(!showAIHint)}
-                    className="text-sm text-gray-400 hover:text-white flex items-center gap-1"
-                  >
-                    {showAIHint ? <EyeOff size={16} /> : <Eye size={16} />}
-                    {showAIHint ? '숨기기' : '힌트 보기'}
-                  </button>
+                  <div className="text-xs text-gray-400">
+                    {identification.method || 'RandomForest 15-feature model'}
+                  </div>
                 </div>
                 
-                {showAIHint && (
-                  <div className="bg-blue-900/30 rounded p-3 border border-blue-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className={`text-lg font-bold px-2 py-1 rounded ${getMissileColor(identification.predicted_type)}`}>
-                        {identification.predicted_type}
-                      </span>
-                      <span className={`font-semibold ${getConfidenceColor(identification.confidence)}`}>
-                        {identification.confidence}%
-                      </span>
+                <div className="bg-black/30 rounded p-3 mb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">ML 예측:</span>
+                    <span className={`text-xl font-bold px-3 py-1 rounded ${getMissileColor(identification.predicted_type)}`}>
+                      {identification.predicted_type}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">신뢰도:</span>
+                    <span className={`text-lg font-semibold ${getConfidenceColor(identification.confidence)}`}>
+                      {identification.confidence}%
+                    </span>
+                  </div>
+                  {actualType && (
+                    <div className="mt-3 pt-3 border-t border-purple-700/50">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-400">실제 미사일:</span>
+                        <span className={`text-2xl font-bold px-4 py-2 rounded ${getMissileColor(actualType)} ${gameMode === 'revealed' ? 'animate-pulse' : ''}`}>
+                          {actualType}
+                        </span>
+                      </div>
+                      {gameMode === 'revealed' && (
+                        <>
+                          <div className="flex items-center justify-between mt-2">
+                            <span className="text-sm text-gray-400">ML 예측 결과:</span>
+                            <span className={`text-xl font-bold ${identification.predicted_type === actualType ? 'text-green-400' : 'text-red-400'}`}>
+                              {identification.predicted_type === actualType ? '✅ 정확!' : '❌ 오류'}
+                            </span>
+                          </div>
+                          {trajectoryParams && (
+                            <div className="mt-3 pt-3 border-t border-purple-700/50">
+                              <div className="text-xs font-semibold text-cyan-300 mb-2">🚀 발사 파라미터</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="bg-black/30 rounded p-2">
+                                  <div className="text-gray-400">발사각 (Elevation)</div>
+                                  <div className="text-cyan-400 font-bold text-lg">{trajectoryParams.launch_angle}°</div>
+                                </div>
+                                <div className="bg-black/30 rounded p-2">
+                                  <div className="text-gray-400">방위각 (Azimuth)</div>
+                                  <div className="text-cyan-400 font-bold text-lg">{trajectoryParams.azimuth}°</div>
+                                </div>
+                                {trajectoryParams.seed !== null && (
+                                  <div className="bg-black/30 rounded p-2 col-span-2">
+                                    <div className="text-gray-400">시뮬레이션 Seed</div>
+                                    <div className="text-cyan-400 font-mono">{trajectoryParams.seed}</div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
+                  )}
+                </div>
+
+                {/* Detailed ML Visualization */}
+                {mlDetails && showMLVisualization && (
+                  <div className="mt-4 space-y-3 border-t border-purple-700/50 pt-3">
+                    <div className="text-sm font-semibold text-purple-300 mb-2">
+                      🌲 RandomForest 분석 과정 (총 {mlDetails.n_estimators}개 트리)
+                    </div>
+                    
+                    {/* Feature Importance Visualization - TOP 10 like eval_by_angle.py */}
+                    <div className="bg-black/30 rounded p-3">
+                      <div className="text-xs font-semibold text-blue-300 mb-2">
+                        📊 특징 중요도 (Top 10) - eval_by_angle.py 형식
+                      </div>
+                      <div className="space-y-1 max-h-64 overflow-y-auto">
+                        {mlDetails.detailed_features && mlDetails.detailed_features.slice(0, 10).map((feature, idx) => (
+                          <div key={idx} className="text-xs">
+                            <div className="flex justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-cyan-400 font-bold w-6">{idx + 1}.</span>
+                                <span className="text-gray-300">{feature.name}</span>
+                              </div>
+                              <span className="text-yellow-400 font-mono">{feature.importance.toFixed(2)}%</span>
+                            </div>
+                            <div className="w-full bg-gray-700 rounded-full h-2 ml-8">
+                              <div 
+                                className="bg-gradient-to-r from-yellow-500 to-orange-500 h-2 rounded-full transition-all duration-1000"
+                                style={{ width: `${Math.min(feature.importance, 100)}%` }}
+                              />
+                            </div>
+                            <div className="flex justify-between mt-1 text-[10px] text-gray-500 ml-8">
+                              <span>원본: {feature.raw_value}</span>
+                              <span>정규화: {feature.scaled_value}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Tree Voting Visualization */}
+                    {mlDetails.tree_predictions && mlDetails.tree_predictions.length > 0 && (
+                      <div className="bg-black/30 rounded p-3">
+                        <div className="text-xs font-semibold text-green-300 mb-2">
+                          🗳️ 결정 트리 투표 (샘플 10개)
+                        </div>
+                        <div className="grid grid-cols-5 gap-1 mb-2">
+                          {mlDetails.tree_predictions.map((tree, idx) => (
+                            <div 
+                              key={idx}
+                              className={`text-center p-1 rounded text-[10px] font-bold transition-all duration-300 ${
+                                getMissileColor(tree.prediction)
+                              } ${idx === currentTreeIndex ? 'ring-2 ring-white scale-110' : 'opacity-60'}`}
+                            >
+                              T{tree.tree_id}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-xs text-gray-400 mb-2">
+                          투표 집계:
+                        </div>
+                        <div className="space-y-1">
+                          {mlDetails.voting_summary && Object.entries(mlDetails.voting_summary).map(([missile, votes]) => (
+                            <div key={missile} className="flex items-center gap-2">
+                              <span className={`text-xs font-bold px-2 py-1 rounded ${getMissileColor(missile)}`}>
+                                {missile}
+                              </span>
+                              <div className="flex-1 bg-gray-700 rounded-full h-4">
+                                <div 
+                                  className={`h-4 rounded-full transition-all duration-1000 flex items-center justify-end pr-1 ${
+                                    missile === identification.predicted_type ? 'bg-green-500' : 'bg-gray-500'
+                                  }`}
+                                  style={{ width: `${(votes / 10) * 100}%` }}
+                                >
+                                  <span className="text-[10px] font-bold text-white">{votes}/10</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Probability Distribution */}
+                    <div className="bg-black/30 rounded p-3">
+                      <div className="text-xs font-semibold text-pink-300 mb-2">
+                        📈 최종 확률 분포
+                      </div>
+                      <div className="space-y-2">
+                        {identification.all_probabilities && Object.entries(identification.all_probabilities)
+                          .sort(([,a], [,b]) => b - a)
+                          .map(([missile, prob]) => (
+                            <div key={missile}>
+                              <div className="flex justify-between mb-1">
+                                <span className={`text-xs font-bold ${getMissileColor(missile)}`}>
+                                  {missile}
+                                </span>
+                                <span className="text-xs font-mono text-yellow-400">{prob}%</span>
+                              </div>
+                              <div className="w-full bg-gray-700 rounded-full h-3">
+                                <div 
+                                  className={`h-3 rounded-full transition-all duration-1000 ${
+                                    missile === identification.predicted_type 
+                                      ? 'bg-gradient-to-r from-green-500 to-emerald-500' 
+                                      : 'bg-gradient-to-r from-gray-500 to-gray-600'
+                                  }`}
+                                  style={{ width: `${prob}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-purple-300 mb-1">분석 근거:</div>
+                  {identification.reasons && identification.reasons.map((reason, idx) => (
+                    <div key={idx} className="text-xs text-gray-300 bg-black/20 rounded px-2 py-1">
+                      • {reason}
+                    </div>
+                  ))}
+                </div>
+
+                {identification.all_probabilities && (
+                  <div className="mt-3 pt-3 border-t border-purple-700/50">
+                    <div className="text-xs font-semibold text-purple-300 mb-2">전체 확률 분포:</div>
                     <div className="space-y-1">
-                      {identification.reasons.map((reason, idx) => (
-                        <p key={idx} className="text-xs text-gray-400">• {reason}</p>
+                      {Object.entries(identification.all_probabilities).map(([type, prob]) => (
+                        <div key={type} className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400 w-16">{type}:</span>
+                          <div className="flex-1 bg-gray-700 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full ${type === identification.predicted_type ? 'bg-purple-500' : 'bg-gray-500'}`}
+                              style={{ width: `${prob}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-gray-400 w-12 text-right">{prob}%</span>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -644,7 +980,7 @@ const GameApp = () => {
                     <XCircle className="w-6 h-6 text-red-400" />
                   )}
                   <span className="text-xl font-bold">
-                    {userGuess === actualType ? '정답!' : '오답'}
+                    {userGuess === actualType ? 'ML 모델 정답!' : 'ML 모델 오답'}
                   </span>
                 </div>
                 <div className="space-y-2 text-sm">
@@ -655,13 +991,13 @@ const GameApp = () => {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">당신의 선택:</span>
+                    <span className="text-gray-400">ML 예측:</span>
                     <span className="font-semibold">{userGuess}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">AI 예측:</span>
-                    <span className="font-semibold">
-                      {identification?.predicted_type}
+                    <span className="text-gray-400">ML 정확도:</span>
+                    <span className={`font-semibold ${userGuess === actualType ? 'text-green-400' : 'text-red-400'}`}>
+                      {userGuess === actualType ? '✓ 정확' : '✗ 오류'}
                       {identification?.predicted_type === actualType && (
                         <span className="text-green-400 ml-1">✓</span>
                       )}

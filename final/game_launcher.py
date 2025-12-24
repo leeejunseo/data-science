@@ -25,6 +25,15 @@ import urllib.parse
 import os
 import joblib
 
+# Import main_visualization for real-time simulation
+try:
+    from main_visualization import run_simulation_programmatic
+    _simulation_available = True
+except ImportError:
+    print("⚠ main_visualization 모듈 없음. 실시간 시뮬레이션 비활성화")
+    run_simulation_programmatic = None
+    _simulation_available = False
+
 # Windows 콘솔 UTF-8 인코딩 설정
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -53,22 +62,63 @@ def load_ml_model():
     features_path = MODEL_DIR / "feature_names.pkl"
     types_path = MODEL_DIR / "missile_types.pkl"
     
+    print(f"\n{'='*60}")
+    print(f"ML 모델 로드 시도")
+    print(f"{'='*60}")
+    print(f"모델 경로: {model_path}")
+    print(f"모델 존재: {model_path.exists()}")
+    
     if not model_path.exists():
-        print(f"⚠ ML 모델 없음: {model_path}")
-        print("   먼저 eval_by_angle.py를 실행하세요.")
+        print(f"\n❌ ML 모델 파일 없음: {model_path}")
+        print(f"   trained_models/ 디렉토리 확인:")
+        if MODEL_DIR.exists():
+            print(f"   디렉토리 존재: {MODEL_DIR}")
+            files = list(MODEL_DIR.glob("*.pkl"))
+            if files:
+                print(f"   발견된 파일:")
+                for f in files:
+                    print(f"     - {f.name}")
+            else:
+                print(f"   ⚠ .pkl 파일 없음")
+        else:
+            print(f"   ⚠ trained_models/ 디렉토리 없음")
+        print(f"\n   해결 방법:")
+        print(f"   1. eval_by_angle.py 실행하여 모델 생성")
+        print(f"   2. 또는 기존 모델을 trained_models/에 복사")
         return False
     
     try:
         ML_MODEL = joblib.load(model_path)
-        ML_SCALER = joblib.load(scaler_path)
-        ML_FEATURE_NAMES = joblib.load(features_path)
-        ML_MISSILE_TYPES = joblib.load(types_path)
-        print(f"✅ ML 모델 로드 완료:")
+        
+        # Scaler, feature names, missile types는 선택적
+        if scaler_path.exists():
+            ML_SCALER = joblib.load(scaler_path)
+        else:
+            print(f"⚠ Scaler 없음, StandardScaler 기본값 사용")
+            from sklearn.preprocessing import StandardScaler
+            ML_SCALER = StandardScaler()
+        
+        if features_path.exists():
+            ML_FEATURE_NAMES = joblib.load(features_path)
+        else:
+            ML_FEATURE_NAMES = [f"feature_{i}" for i in range(15)]
+        
+        if types_path.exists():
+            ML_MISSILE_TYPES = joblib.load(types_path)
+        else:
+            ML_MISSILE_TYPES = ["SCUD-B", "Nodong", "KN-23"]
+        
+        print(f"\n✅ ML 모델 로드 완료:")
+        print(f"   - 모델: RandomForest")
         print(f"   - 특성: {len(ML_FEATURE_NAMES)}개")
-        print(f"   - 미사일: {ML_MISSILE_TYPES}")
+        print(f"   - 미사일 타입: {ML_MISSILE_TYPES}")
+        print(f"{'='*60}\n")
         return True
     except Exception as e:
-        print(f"⚠ ML 모델 로드 실패: {e}")
+        print(f"\n❌ ML 모델 로드 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'='*60}\n")
         return False
 
 # Find Python executable (prefer venv)
@@ -126,11 +176,57 @@ class GameState:
     trajectory_data: dict = None
     identification_result: dict = None
     revealed: bool = False
+    launch_angle: float = None
+    azimuth: float = None
+    seed: int = None
 
 
 def select_random_missile():
-    """Randomly select a missile type and corresponding NPZ file"""
-    # Filter to only missiles with available NPZ files
+    """Randomly select a missile type and run real-time simulation"""
+    # 미사일 종류 랜덤 선택
+    missile_types = ["SCUD-B", "Nodong", "KN-23"]
+    missile_type = random.choice(missile_types)
+    
+    # 고각 및 방위각 설정
+    launch_angle = random.uniform(15, 80)  # 15~80도
+    azimuth = 90.0                          # 90도 고정
+    seed = random.randint(0, 9999)
+    
+    print(f"\n{'='*60}")
+    print(f"🎯 [HIDDEN] Selected missile: {missile_type}")
+    print(f"   Launch angle: {launch_angle:.1f}°")
+    print(f"   Azimuth: {azimuth:.1f}°")
+    print(f"   Seed: {seed}")
+    print(f"{'='*60}")
+    
+    # 실시간 시뮬레이션 실행
+    if _simulation_available and run_simulation_programmatic is not None:
+        try:
+            npz_path = run_simulation_programmatic(
+                missile_type=missile_type,
+                launch_angle_deg=launch_angle,
+                azimuth_deg=azimuth,
+                seed=seed
+            )
+            
+            if npz_path:
+                GameState.hidden_missile = missile_type
+                GameState.npz_path = str(npz_path)
+                GameState.revealed = False
+                GameState.launch_angle = launch_angle
+                GameState.azimuth = azimuth
+                GameState.seed = seed
+                print(f"✅ 실시간 시뮬레이션 완료: {npz_path}")
+                return missile_type, str(npz_path)
+            else:
+                print("⚠ 시뮬레이션 실패, 기존 NPZ 파일 사용")
+        except Exception as e:
+            print(f"⚠ 실시간 시뮬레이션 오류: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Fallback: 기존 NPZ 파일 사용
+    print("⚠ Fallback: 기존 NPZ 파일 사용")
     available = {k: v for k, v in NPZ_FILES.items() if v}
     
     if not available:
@@ -144,10 +240,7 @@ def select_random_missile():
     GameState.npz_path = str(npz_file)
     GameState.revealed = False
     
-    print(f"\n{'='*60}")
-    print(f"🎯 [HIDDEN] Selected missile: {missile_type}")
     print(f"   NPZ file: {npz_file.name}")
-    print(f"{'='*60}")
     
     return missile_type, str(npz_file)
 
@@ -168,6 +261,7 @@ def load_npz_data(npz_path: str) -> dict:
             'gamma': data['gamma'].tolist() if 'gamma' in data else [],
             'alpha': data['alpha'].tolist() if 'alpha' in data else [],
             'mach': data['mach'].tolist() if 'mach' in data else [],
+            'q': data['q'].tolist() if 'q' in data else [],  # pitch rate
         }
         
         # Calculate key features
@@ -297,43 +391,168 @@ def analyze_signature_ml(data: dict) -> dict:
     """
     ML 기반 미사일 분류 (15개 시그니처 사용: 레이더 12 + 6DOF 3)
     """
-    if ML_MODEL is None or ML_SCALER is None:
+    print(f"\n{'='*60}")
+    print(f"ML 시그니처 분석 시작")
+    print(f"{'='*60}")
+    
+    if ML_MODEL is None:
+        print("❌ ML 모델 없음")
         return None
     
+    if ML_SCALER is None:
+        print("⚠ Scaler 없음, 정규화 없이 진행")
+    
+    print("15개 특징 추출 중...")
     features = extract_15_features(data)
     if features is None:
+        print("❌ 특징 추출 실패")
         return None
     
+    print(f"✅ 특징 추출 완료: {features[:5]}... (총 {len(features)}개)")
+    
     # Scale and predict
-    features_scaled = ML_SCALER.transform([features])
-    prediction = ML_MODEL.predict(features_scaled)[0]
-    probabilities = ML_MODEL.predict_proba(features_scaled)[0]
-    
-    predicted_type = ML_MISSILE_TYPES[prediction]
-    confidence = float(probabilities[prediction] * 100)
-    
-    # Feature importance 기반 이유 생성
-    feature_dict = dict(zip(ML_FEATURE_NAMES, features))
-    reasons = [
-        f"ML 분류: {predicted_type} (신뢰도: {confidence:.1f}%)",
-        f"최대고도: {feature_dict.get('max_altitude_km', 0):.1f} km",
-        f"사거리: {feature_dict.get('final_range_km', 0):.1f} km",
-        f"최대마하: {feature_dict.get('max_mach', 0):.2f}",
-    ]
-    
-    result = {
-        "predicted_type": predicted_type,
-        "confidence": round(confidence, 1),
-        "reasons": reasons,
-        "features": feature_dict,
-        "all_probabilities": {
-            ML_MISSILE_TYPES[i]: round(float(p) * 100, 1) 
-            for i, p in enumerate(probabilities)
-        },
-        "method": "ML (RandomForest, 15 features)"
-    }
-    
-    return result
+    try:
+        if ML_SCALER is not None:
+            features_scaled = ML_SCALER.transform([features])
+            print("✅ 특징 정규화 완료")
+        else:
+            features_scaled = [features]
+            print("⚠ 정규화 생략")
+        
+        prediction = ML_MODEL.predict(features_scaled)[0]
+        probabilities = ML_MODEL.predict_proba(features_scaled)[0]
+        
+        predicted_type = ML_MISSILE_TYPES[prediction]
+        confidence = float(probabilities[prediction] * 100)
+        
+        # Feature importance 기반 이유 생성
+        feature_dict = dict(zip(ML_FEATURE_NAMES, features))
+        
+        # Get feature importances from the model
+        feature_importances = {}
+        if hasattr(ML_MODEL, 'feature_importances_'):
+            for i, importance in enumerate(ML_MODEL.feature_importances_):
+                if i < len(ML_FEATURE_NAMES):
+                    feature_importances[ML_FEATURE_NAMES[i]] = round(float(importance) * 100, 2)
+        
+        print(f"✅ ML 예측 완료:")
+        print(f"   예측: {predicted_type}")
+        print(f"   신뢰도: {confidence:.1f}%")
+        print(f"   확률 분포: {dict(zip(ML_MISSILE_TYPES, probabilities))}")
+        
+        # Debug: Print top features for this prediction
+        print(f"\n🔍 주요 특징 분석:")
+        top_5_features = sorted(feature_importances.items(), key=lambda x: x[1], reverse=True)[:5]
+        for feat_name, importance in top_5_features:
+            feat_value = feature_dict.get(feat_name, 0)
+            print(f"   {feat_name}: {feat_value:.3f} (중요도: {importance:.1f}%)")
+        
+        # Debug: Check pullup detection
+        has_pullup = detect_pullup_maneuver(data)
+        print(f"\n🎯 Pull-up 기동 감지: {'예' if has_pullup else '아니오'}")
+        
+        # Get individual tree predictions for visualization
+        # Debug: Show tree voting breakdown first
+        print(f"\n🗳️ 트리 투표 분석 (샘플 10개):")
+        tree_predictions = []
+        if hasattr(ML_MODEL, 'estimators_'):
+            n_trees = min(len(ML_MODEL.estimators_), 10)  # Show first 10 trees
+            for i, tree in enumerate(ML_MODEL.estimators_[:n_trees]):
+                tree_pred = tree.predict(features_scaled)[0]
+                tree_proba = tree.predict_proba(features_scaled)[0]
+                tree_predictions.append({
+                    "tree_id": i + 1,
+                    "prediction": ML_MISSILE_TYPES[tree_pred],
+                    "probabilities": {
+                        ML_MISSILE_TYPES[j]: round(float(p) * 100, 1)
+                        for j, p in enumerate(tree_proba)
+                    }
+                })
+            
+            # Print tree voting summary
+            for missile in ML_MISSILE_TYPES:
+                votes = sum(1 for t in tree_predictions if t['prediction'] == missile)
+                print(f"   {missile}: {votes}/10 표")
+        
+        # Detailed feature analysis
+        detailed_features = []
+        for i, (name, value) in enumerate(zip(ML_FEATURE_NAMES, features)):
+            scaled_value = features_scaled[0][i] if ML_SCALER is not None else value
+            detailed_features.append({
+                "name": name,
+                "raw_value": round(float(value), 3),
+                "scaled_value": round(float(scaled_value), 3),
+                "importance": feature_importances.get(name, 0)
+            })
+        
+        # Sort by importance
+        detailed_features.sort(key=lambda x: x['importance'], reverse=True)
+        
+        # Generate detailed reasons based on top features
+        top_features = sorted(feature_importances.items(), key=lambda x: x[1], reverse=True)[:5]
+        reasons = []
+        for feat_name, importance in top_features:
+            feat_value = feature_dict.get(feat_name, 0)
+            if 'altitude' in feat_name:
+                reasons.append(f"{feat_name}: {feat_value:.1f}km (중요도 {importance:.1f}%)")
+            elif 'range' in feat_name:
+                reasons.append(f"{feat_name}: {feat_value:.1f}km (중요도 {importance:.1f}%)")
+            elif 'mach' in feat_name or 'velocity' in feat_name:
+                reasons.append(f"{feat_name}: {feat_value:.2f} (중요도 {importance:.1f}%)")
+            elif 'angle' in feat_name:
+                reasons.append(f"{feat_name}: {feat_value:.1f}° (중요도 {importance:.1f}%)")
+            else:
+                reasons.append(f"{feat_name}: {feat_value:.3f} (중요도 {importance:.1f}%)")
+        
+        # Add pullup detection info
+        has_pullup = detect_pullup_maneuver(data)
+        if has_pullup:
+            reasons.append("⚠️ Pull-up 기동 감지 (KN-23 특징)")
+        
+        # Add classification hints based on probabilities
+        prob_dict = dict(zip(ML_MISSILE_TYPES, probabilities))
+        sorted_probs = sorted(prob_dict.items(), key=lambda x: x[1], reverse=True)
+        if len(sorted_probs) >= 2:
+            diff = sorted_probs[0][1] - sorted_probs[1][1]
+            if diff < 0.2:  # Less than 20% difference
+                reasons.append(f"⚠️ {sorted_probs[1][0]}와 유사 (차이 {diff*100:.1f}%)")
+        
+        result = {
+            "predicted_type": predicted_type,
+            "confidence": round(confidence, 1),
+            "reasons": reasons,
+            "features": {
+                "max_altitude_km": f"{feature_dict.get('max_altitude_km', 0):.1f}",
+                "range_km": f"{feature_dict.get('final_range_km', 0):.1f}",
+                "flight_time_s": f"{feature_dict.get('total_flight_time', 0):.1f}",
+                "has_pullup": detect_pullup_maneuver(data)
+            },
+            "all_probabilities": {
+                ML_MISSILE_TYPES[i]: round(float(p) * 100, 1) 
+                for i, p in enumerate(probabilities)
+            },
+            "method": "ML (RandomForest, 15 features)",
+            # Detailed ML analysis data for visualization
+            "ml_details": {
+                "n_estimators": len(ML_MODEL.estimators_) if hasattr(ML_MODEL, 'estimators_') else 0,
+                "detailed_features": detailed_features,
+                "tree_predictions": tree_predictions,
+                "feature_importances": feature_importances,
+                "voting_summary": {
+                    missile: sum(1 for t in tree_predictions if t['prediction'] == missile)
+                    for missile in ML_MISSILE_TYPES
+                }
+            }
+        }
+        
+        print(f"{'='*60}\n")
+        return result
+    except Exception as e:
+        print(f"❌ ML 예측 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'='*60}\n")
+        return None
 
 
 def analyze_signature(data: dict) -> dict:
@@ -344,12 +563,23 @@ def analyze_signature(data: dict) -> dict:
     if not data:
         return {"predicted_type": "UNKNOWN", "confidence": 0, "reasons": []}
     
+    # Debug: Check ML_MODEL status
+    print(f"\n[DEBUG] analyze_signature 호출")
+    print(f"[DEBUG] ML_MODEL is None: {ML_MODEL is None}")
+    print(f"[DEBUG] ML_MODEL type: {type(ML_MODEL)}")
+    
     # Try ML-based analysis first
     if ML_MODEL is not None:
+        print(f"[DEBUG] ML 분석 시도...")
         ml_result = analyze_signature_ml(data)
         if ml_result is not None:
+            print(f"[DEBUG] ML 분석 성공!")
             GameState.identification_result = ml_result
             return ml_result
+        else:
+            print(f"[DEBUG] ML 분석 실패, Rule-based로 폴백")
+    else:
+        print(f"[DEBUG] ML_MODEL이 None, Rule-based로 폴백")
     
     # Fallback to rule-based analysis
     print("⚠ ML 모델 없음, 규칙 기반 분류 사용")
@@ -465,6 +695,70 @@ def detect_pullup_maneuver(data: dict) -> bool:
     return False
 
 
+def generate_visualization_base64(npz_path: str) -> str:
+    """Generate visualization and return as base64 encoded image"""
+    try:
+        print(f"\n{'='*60}")
+        print(f"그래프 생성 시작: {Path(npz_path).name}")
+        print(f"{'='*60}")
+        
+        import base64
+        from io import BytesIO
+        
+        # Set matplotlib to non-interactive backend before importing pyplot
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        # Import visualization class
+        if str(SCRIPT_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPT_DIR))
+        from main_visualization import MissileVisualization6DOF
+        
+        # Extract missile type from filename
+        fname = Path(npz_path).name
+        if 'SCUD' in fname or 'scud' in fname.lower():
+            missile_type = "SCUD-B"
+        elif 'Nodong' in fname or 'nodong' in fname.lower():
+            missile_type = "Nodong"
+        elif 'KN-23' in fname or 'kn23' in fname.lower() or 'kn-23' in fname.lower():
+            missile_type = "KN-23"
+        else:
+            missile_type = "SCUD-B"
+        
+        print(f"미사일 타입: {missile_type}")
+        
+        # Create visualization
+        viz = MissileVisualization6DOF(missile_type=missile_type)
+        if viz.load_from_npz(npz_path):
+            print("NPZ 로드 성공, 그래프 생성 중...")
+            
+            # Generate plot but don't show
+            viz.plot_comprehensive(save_dir=str(SCRIPT_DIR / "results_6dof"))
+            
+            # Get current figure and save to base64
+            fig = plt.gcf()
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            buf.seek(0)
+            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            
+            print(f"✅ 그래프 생성 완료 (크기: {len(img_base64)} bytes)")
+            print(f"{'='*60}\n")
+            return img_base64
+        else:
+            print("⚠ NPZ 로드 실패")
+            print(f"{'='*60}\n")
+            return None
+    except Exception as e:
+        print(f"\n❌ 그래프 생성 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'='*60}\n")
+        return None
+
+
 def run_visualization(npz_path: str):
     """Run main_visualization.py to show graphs"""
     try:
@@ -559,21 +853,55 @@ class GameAPIHandler(BaseHTTPRequestHandler):
                 
         elif path == "/api/analyze":
             # Load data and run signature analysis
-            if GameState.npz_path:
-                data = load_npz_data(GameState.npz_path)
-                if data:
-                    result = analyze_signature(data)
-                    response = {
-                        "status": "analyzed",
-                        "identification": result
-                    }
-                    status = 200
-                else:
-                    response = {"error": "Failed to load NPZ data"}
-                    status = 500
-            else:
+            print(f"\n{'='*60}")
+            print(f"API /api/analyze 호출")
+            print(f"{'='*60}")
+            
+            if not GameState.npz_path:
+                print("❌ NPZ 경로 없음")
                 response = {"error": "No missile selected. Call /api/start first"}
                 status = 400
+            else:
+                print(f"NPZ 경로: {GameState.npz_path}")
+                print(f"실제 미사일: {GameState.hidden_missile}")
+                
+                # Load NPZ data
+                data = load_npz_data(GameState.npz_path)
+                if not data:
+                    print("❌ NPZ 데이터 로드 실패")
+                    response = {"error": "Failed to load NPZ data"}
+                    status = 500
+                else:
+                    print(f"✅ NPZ 데이터 로드 성공 (샘플 수: {len(data.get('time', []))})")
+                    
+                    # Run signature analysis
+                    result = analyze_signature(data)
+                    if not result:
+                        print("❌ 시그니처 분석 실패")
+                        response = {"error": "Signature analysis failed"}
+                        status = 500
+                    else:
+                        print(f"✅ 시그니처 분석 완료")
+                        print(f"   예측: {result.get('predicted_type')}")
+                        print(f"   신뢰도: {result.get('confidence')}%")
+                        
+                        # Generate visualization as base64
+                        graph_base64 = generate_visualization_base64(GameState.npz_path)
+                        
+                        response = {
+                            "status": "analyzed",
+                            "identification": result,
+                            "graph_image": graph_base64,
+                            "actual_missile": GameState.hidden_missile,
+                            "trajectory_params": {
+                                "launch_angle": round(GameState.launch_angle, 1) if GameState.launch_angle else None,
+                                "azimuth": round(GameState.azimuth, 1) if GameState.azimuth else None,
+                                "seed": GameState.seed
+                            }
+                        }
+                        status = 200
+                        print(f"✅ API 응답 준비 완료")
+                        print(f"{'='*60}\n")
                 
         elif path == "/api/visualize":
             # Launch visualization popup
@@ -664,20 +992,36 @@ class GameAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def log_message(self, format, *args):
-        pass  # Suppress logging
+        # Enable logging for debugging
+        print(f"[HTTP] {format % args}")
 
 
 def run_server(port: int = 5000):
     """Run the API server"""
+    print(f"\n{'='*60}")
+    print(f"🚀 게임 서버 시작")
+    print(f"{'='*60}\n")
+    
     # Load ML model at startup
-    load_ml_model()
+    print("1. ML 모델 로딩 중...")
+    ml_loaded = load_ml_model()
+    
+    if ml_loaded:
+        print(f"\n✅ ML 모델 사용 가능 - ML 기반 분석 활성화")
+        print(f"   Global ML_MODEL: {ML_MODEL is not None}")
+    else:
+        print(f"\n⚠️  ML 모델 로드 실패 - Rule-based 분석으로 폴백")
     
     # Auto-select missile at startup
+    print(f"\n2. 초기 미사일 선택 중...")
     select_random_missile()
     
     server = HTTPServer(('localhost', port), GameAPIHandler)
-    print(f"\n🚀 Game Server running on http://localhost:{port}")
-    print(f"\nAPI Endpoints:")
+    print(f"\n{'='*60}")
+    print(f"✅ 서버 준비 완료")
+    print(f"{'='*60}")
+    print(f"\n🌐 Server URL: http://localhost:{port}")
+    print(f"\n📡 API Endpoints:")
     print(f"  GET  /api/status      - Server status")
     print(f"  GET  /api/start       - Start new game (random missile)")
     print(f"  GET  /api/analyze     - Run signature analysis")
@@ -686,7 +1030,8 @@ def run_server(port: int = 5000):
     print(f"  GET  /api/identification - Get analysis result")
     print(f"  POST /api/guess       - Submit user guess")
     print(f"  POST /api/reset       - Reset game")
-    print(f"\nPress Ctrl+C to stop")
+    print(f"\n⌨️  Press Ctrl+C to stop")
+    print(f"{'='*60}\n")
     
     try:
         server.serve_forever()

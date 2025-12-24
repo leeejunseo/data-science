@@ -565,6 +565,60 @@ class MissileVisualization6DOF:
         return filepath
 
 
+def run_simulation_programmatic(missile_type, launch_angle_deg, azimuth_deg, seed=0):
+    """
+    프로그래밍 방식으로 시뮬레이션 실행 (game_launcher.py에서 호출용)
+    
+    Parameters:
+    -----------
+    missile_type : str
+        미사일 종류 ('SCUD-B', 'Nodong', 'KN-23')
+    launch_angle_deg : float
+        발사각 (도)
+    azimuth_deg : float
+        방위각 (도)
+    seed : int
+        시뮬레이션 시드
+    
+    Returns:
+    --------
+    npz_path : str or None
+        생성된 NPZ 파일 경로
+    """
+    print(f"\n{'='*60}")
+    print(f"프로그래밍 방식 시뮬레이션 실행")
+    print(f"미사일: {missile_type}, 고각: {launch_angle_deg}°, 방위각: {azimuth_deg}°")
+    print(f"{'='*60}\n")
+    
+    # 시각화 객체 생성
+    viz = MissileVisualization6DOF(missile_type=missile_type)
+    
+    # 시뮬레이션 실행
+    success = viz.run_simulation(
+        launch_angle_deg=launch_angle_deg,
+        azimuth_deg=azimuth_deg,
+        sim_time=600
+    )
+    
+    if not success:
+        print("⚠ 시뮬레이션 실패")
+        return None
+    
+    # NPZ 저장
+    npz_path = viz.save_to_npz(
+        launch_angle_deg=launch_angle_deg,
+        azimuth_deg=azimuth_deg,
+        seed=seed
+    )
+    
+    if npz_path:
+        print(f"✓ NPZ 저장 완료: {npz_path}")
+    else:
+        print("⚠ NPZ 저장 실패")
+    
+    return npz_path
+
+
 def main():
     """메인 함수"""
     import sys
