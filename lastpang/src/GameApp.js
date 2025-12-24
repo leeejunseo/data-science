@@ -588,13 +588,22 @@ const GameApp = () => {
                     <Play size={18} /> 시뮬레이션 시작
                   </button>
                 )}
-                {/* Flying state: 예측하기 button appears immediately */}
-                {(gameMode === 'flying' || gameMode === 'analyzing_ready') && (
+                {/* Flying state: disabled button */}
+                {gameMode === 'flying' && (
+                  <button
+                    disabled
+                    className="bg-gray-600 rounded px-4 py-2 flex items-center gap-2 font-semibold cursor-not-allowed opacity-50"
+                  >
+                    <Target size={18} /> 비행 중...
+                  </button>
+                )}
+                {/* Ready for analysis after landing */}
+                {gameMode === 'analyzing_ready' && (
                   <button
                     onClick={handleAnalyze}
                     className="bg-yellow-600 hover:bg-yellow-700 rounded px-4 py-2 flex items-center gap-2 font-semibold animate-pulse"
                   >
-                    <Target size={18} /> 예측하기
+                    <Target size={18} /> 분석하기
                   </button>
                 )}
                 {/* Analyzing state */}

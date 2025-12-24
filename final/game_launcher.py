@@ -287,6 +287,8 @@ def extract_15_features(data: dict) -> np.ndarray:
     Extract 15 features from trajectory data (12 radar + 3 6DOF)
     Same features as signature_generator.py
     """
+    print(f"[extract_15_features] 데이터 키: {list(data.keys())}")
+    
     t = np.array(data.get('time', []))
     x = np.array(data.get('x', []))
     y = np.array(data.get('y', []))
@@ -297,7 +299,10 @@ def extract_15_features(data: dict) -> np.ndarray:
     alpha = np.array(data.get('alpha', []))
     q = np.array(data.get('q', []))  # pitch rate (if available)
     
+    print(f"[extract_15_features] 배열 길이: t={len(t)}, x={len(x)}, V={len(V)}")
+    
     if len(t) < 10:
+        print(f"[extract_15_features] ❌ 데이터 부족: len(t)={len(t)} < 10")
         return None
     
     features = np.zeros(15, dtype=np.float32)
@@ -458,7 +463,7 @@ def analyze_signature_ml(data: dict) -> dict:
         if hasattr(ML_MODEL, 'estimators_'):
             n_trees = min(len(ML_MODEL.estimators_), 10)  # Show first 10 trees
             for i, tree in enumerate(ML_MODEL.estimators_[:n_trees]):
-                tree_pred = tree.predict(features_scaled)[0]
+                tree_pred = int(tree.predict(features_scaled)[0])  # Convert to int
                 tree_proba = tree.predict_proba(features_scaled)[0]
                 tree_predictions.append({
                     "tree_id": i + 1,
@@ -1004,16 +1009,24 @@ def run_server(port: int = 5000):
     
     # Load ML model at startup
     print("1. ML 모델 로딩 중...")
+    sys.stdout.flush()
+    
     ml_loaded = load_ml_model()
     
     if ml_loaded:
         print(f"\n✅ ML 모델 사용 가능 - ML 기반 분석 활성화")
         print(f"   Global ML_MODEL: {ML_MODEL is not None}")
+        print(f"   ML_MODEL type: {type(ML_MODEL).__name__ if ML_MODEL else 'None'}")
+        if ML_MODEL and hasattr(ML_MODEL, 'n_estimators'):
+            print(f"   트리 개수: {ML_MODEL.n_estimators}")
     else:
         print(f"\n⚠️  ML 모델 로드 실패 - Rule-based 분석으로 폴백")
     
+    sys.stdout.flush()
+    
     # Auto-select missile at startup
     print(f"\n2. 초기 미사일 선택 중...")
+    sys.stdout.flush()
     select_random_missile()
     
     server = HTTPServer(('localhost', port), GameAPIHandler)
