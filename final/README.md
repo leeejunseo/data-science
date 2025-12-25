@@ -420,10 +420,15 @@ python game_launcher.py --demo
 
 # API 서버 모드 (웹 연동) & 최종본
 
-# 백엔드 서버 실행
+# 1. 백엔드 서버 실행
 ./start_backend.bat
 
-# 새로운 터미널에서 프론트엔드 실행
+# 2. 프론트엔드 의존성 설치 (최초 1회 또는 package.json 변경 시)
+cd lastpang
+npm install
+cd ..
+
+# 3. 새로운 터미널에서 프론트엔드 실행
 ./run_game.bat
 ```
 
