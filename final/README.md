@@ -401,16 +401,30 @@ python view_npz.py results_6dof/SCUD-B_45.0deg_20251219_220432.npz
 
 ### 8.4 게임 모드
 
+#### Node.js 설치
+웹 프론트엔드를 실행하기 전에 Node.js가 설치되어 있어야 합니다.
+
+**Windows에 Node.js 설치 방법:**
+1. [Node.js 공식 웹사이트](https://nodejs.org/)에서 LTS 버전을 다운로드하여 설치합니다.
+2. 설치가 완료되면 터미널에서 다음 명령어로 설치를 확인합니다:
+   ```bash
+   node --version
+   npm --version
+   ```
+
+#### 실행 방법
+
 ```bash
 # 데모 모드 (단일 분류)
 python game_launcher.py --demo
 
 # API 서버 모드 (웹 연동) & 최종본
 
+# 백엔드 서버 실행
 ./start_backend.bat
-새로운 터미널로
-./run_game.bat
 
+# 새로운 터미널에서 프론트엔드 실행
+./run_game.bat
 ```
 
 **API 엔드포인트:**
