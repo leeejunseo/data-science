@@ -254,40 +254,12 @@ MISSILE_CD_TABLES = {
 
 ### 6.2 15차원 시그니처 특성
 
-#### 궤적 형태 (4개) - 레이더 추적 관측
+> 특성 상세 설명은 **보고서.md 9.5절** 참조
 
-| 특성 | 설명 | 단위 |
-|------|------|------|
-| `max_altitude_km` | 최대 고도 | km |
-| `final_range_km` | 최종 사거리 | km |
-| `impact_angle_deg` | 낙하각 | deg |
-| `total_flight_time` | 총 비행시간 | s |
-
-#### 속도/마하 (4개) - 레이더 도플러 관측
-
-| 특성 | 설명 | 단위 |
-|------|------|------|
-| `max_velocity` | 최대 속도 | m/s |
-| `terminal_velocity` | 종말 속도 | m/s |
-| `max_mach` | 최대 마하수 | - |
-| `velocity_loss_ratio` | 속도 손실률 | - |
-
-#### 감속/기동/효율 (4개) - 궤적 변화 추정
-
-| 특성 | 설명 | 단위 |
-|------|------|------|
-| `max_deceleration` | 최대 감속도 | m/s² |
-| `ground_track_curvature` | 지상 궤적 곡률 | 1/m |
-| `path_efficiency` | 경로 효율성 | - |
-| `energy_ratio` | 에너지 비율 (KE/PE) | - |
-
-#### 6DOF 기동성 보강 (3개) - 동적 특성
-
-| 특성 | 설명 | 의미 |
-|------|------|------|
-| `alpha_std_deg` | 받음각 표준편차 | 기동 강도 |
-| `q_max_deg_s` | 최대 피치율 | 급기동 지표 |
-| `alpha_q_correlation` | α-q 상관계수 | 동적 안정성 |
+- **궤적 형태 (4개):** max_altitude_km, final_range_km, impact_angle_deg, total_flight_time
+- **속도/마하 (4개):** max_velocity, terminal_velocity, max_mach, velocity_loss_ratio
+- **감속/기동 (4개):** max_deceleration, ground_track_curvature, path_efficiency, energy_ratio
+- **6DOF 기동성 (3개):** alpha_std_deg, q_max_deg_s, alpha_q_correlation
 
 ### 6.3 특성 추출 코드
 
@@ -485,11 +457,7 @@ python game_launcher.py --port 5000
  10.  total_flight_time            3.0%
 ```
 
-### 9.3 결과 해석
-
-1. **최대 마하수, 사거리, 최대속도**가 가장 중요한 분류 기준
-2. **6DOF 기동성 특성** (`q_max_deg_s`, `alpha_std_deg`)이 상위 10위 내 진입
-3. **100% 정확도** 달성 (발사각 그룹 분리 평가에서도)
+> 결과 해석 상세는 **보고서.md 10.5절** 참조
 
 ---
 
@@ -805,14 +773,11 @@ data-science/
 
 ## 📚 참고 자료
 
-### 학술 문헌
-- Zipfel, P. H. (2007). *Modeling and Simulation of Aerospace Vehicle Dynamics*. AIAA.
-- Stevens, B. L., & Lewis, F. L. (2003). *Aircraft Control and Simulation*. Wiley.
-- MIL-HDBK-1211 (1995). *Missile Flight Simulation*. US DoD.
+> 학술 문헌 상세는 **보고서.md 14장** 참조
 
-### 미사일 데이터
-- CSIS Missile Threat: https://missilethreat.csis.org/
-- 38 North: https://www.38north.org/
+**핵심 문헌:** Zipfel (2007), Stevens & Lewis (2003), MIL-HDBK-1211
+
+**미사일 데이터:** [CSIS Missile Threat](https://missilethreat.csis.org/), [38 North](https://www.38north.org/)
 
 ---
 
