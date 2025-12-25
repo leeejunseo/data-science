@@ -405,8 +405,12 @@ python view_npz.py results_6dof/SCUD-B_45.0deg_20251219_220432.npz
 # 데모 모드 (단일 분류)
 python game_launcher.py --demo
 
-# API 서버 모드 (웹 연동)
-python game_launcher.py --port 5000
+# API 서버 모드 (웹 연동) & 최종본
+
+./start_backend.bat
+새로운 터미널로
+./run_game.bat
+
 ```
 
 **API 엔드포인트:**
